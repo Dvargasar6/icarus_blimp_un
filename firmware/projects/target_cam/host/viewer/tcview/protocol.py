@@ -15,6 +15,9 @@ What comes out of the camera on UART0 is one byte stream that mixes:
     #!CAL ok|refused hue= ...  the result of 'c' (calibrate on centre)
     #!WBCAL ok|refused|cancelled ...  the result of 'Wc' (white card)
     #!CNNBENCH n= macs= us_per_crop= cycles_per_mac= ...  '!cnnbench' (phase C0)
+    #!MODEL seq= kind= src= len= crc=     a model record ('!dump'), framed as a frame
+    #!MODEL none kind= src=               '!dump' of a kind that is not running
+    #!UPLOAD ready|ok|refused kind= ...   '!upload': send the bytes now / how it ended
     #!WB mode= ctrl1= ...      'W': the sensor's white-balance registers
     #!END seq=<n>              closes a binary packet
 
@@ -136,6 +139,31 @@ class WbCal:
 class CnnBench:
     """#!CNNBENCH: the CNN's measured cost on the camera ('!cnnbench'):
     n, channels, macs, us_per_crop, cycles_per_mac, model (built-in|dummy)."""
+    v: dict
+
+
+@dataclass
+class ModelRec:
+    """#!MODEL: the record of a model the camera runs ('!dump'). kind is
+    lut, clf or cnn; src is build (compiled in) or upload (model_store.h)."""
+    seq: int
+    kind: str
+    src: str
+    data: bytes
+
+
+@dataclass
+class ModelNone:
+    """'#!MODEL none': no model of that kind runs (src none, bad, ...)."""
+    kind: str
+    src: str
+
+
+@dataclass
+class Upload:
+    """#!UPLOAD: status ready (send the record's bytes now), ok or refused
+    (reason=); v holds kind= and the rest."""
+    status: str
     v: dict
 
 
@@ -331,6 +359,12 @@ def parse_line(line: str):
         if tag == "WBCAL":
             status, _, kv = rest.partition(" ")
             return WbCal(status, parse_kv(kv))
+        if tag == "MODEL" and rest.startswith("none "):
+            kv = parse_kv(rest[5:], convert=False)
+            return ModelNone(kv.get("kind", "?"), kv.get("src", "?"))
+        if tag == "UPLOAD":
+            status, _, kv = rest.partition(" ")
+            return Upload(status, parse_kv(kv, convert=False))
         if tag == "CNNBENCH":
             return CnnBench(parse_kv(rest))
         if tag == "END":
@@ -382,6 +416,8 @@ class StreamParser:
         self.frames_bad = 0
         self.blobs_ok = 0
         self.blobs_bad = 0
+        self.models_ok = 0
+        self.models_bad = 0
         self.junk_lines = 0
 
     def reset(self):
@@ -449,7 +485,8 @@ class StreamParser:
         if not raw:
             return None
         for kind in PACKETS:
-            if raw.startswith(b"#!" + kind.encode() + b" "):
+            if raw.startswith(b"#!" + kind.encode() + b" ") and \
+                    not raw.startswith(b"#!MODEL none "):     # a text line, no payload
                 return self._start_packet(kind, raw, now)
         try:
             text = raw.decode("ascii")
@@ -461,7 +498,8 @@ class StreamParser:
         return ev
 
     def _count(self, kind: str, ok: bool):
-        name = ("frames_" if kind == "FRAME" else "blobs_") + ("ok" if ok else "bad")
+        name = {"FRAME": "frames_", "BLOB": "blobs_", "MODEL": "models_"}[kind] + (
+            "ok" if ok else "bad")
         setattr(self, name, getattr(self, name) + 1)
 
     def _start_packet(self, kind: str, raw: bytes, now: float):
@@ -533,7 +571,23 @@ def _blob_event(seq: int, kv: dict, data: bytes) -> BlobRec:
                    wb, gain)
 
 
-PACKETS = {"FRAME": (_frame_ok, _frame_event), "BLOB": (_blob_ok, _blob_event)}
+def _model_ok(kv: dict, length: int) -> bool:
+    return kv["kind"] in ("lut", "clf", "cnn") and length <= 16384
+
+
+def _model_event(seq: int, kv: dict, data: bytes) -> ModelRec:
+    return ModelRec(seq, kv["kind"], kv.get("src", "?"), data)
+
+
+PACKETS = {"FRAME": (_frame_ok, _frame_event), "BLOB": (_blob_ok, _blob_event),
+           "MODEL": (_model_ok, _model_event)}
+
+
+def encode_model(seq: int, kind: str, src: str, data: bytes) -> bytes:
+    """A #!MODEL packet as link_send_packet() puts it on the wire."""
+    head = "#!MODEL seq=%d kind=%s src=%s len=%d crc=%08x\r\n" % (
+        seq, kind, src, len(data), crc32(data))
+    return head.encode() + data + ("\r\n#!END seq=%d\r\n" % seq).encode()
 
 
 def encode_blob(seq: int, t_ms: int, k: int, n: int, feat, crop: np.ndarray,

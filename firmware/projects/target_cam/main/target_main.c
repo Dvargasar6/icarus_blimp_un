@@ -56,6 +56,7 @@
 #include "models/cnn_model.h"
 #include "link.h"
 #include "settings.h"
+#include "model_store.h"
 
 static const char *TAG = "target";
 
@@ -185,66 +186,68 @@ static uint32_t    s_lut_id;          /* the table's train id; #!CFG lut_id= */
    end in the same buffer, checked by the same color_lut_load(). */
 static uint8_t s_lut[COLOR_LUT_BYTES];
 
-/* The classifier, unpacked from its record at boot. Its state adds one value
-   to the lut's: "mismatch", an intact classifier trained behind a different
-   colour table than the one built in. Its features would be computed on
-   other pixels than it learned from, so it is left out (stage 2 runs as 1). */
-#ifndef CLF_MODEL_NONE
+/* The classifier and the CNN, unpacked from their records. Either can come
+   from the build or from an upload (model_store.h), so they exist whether or
+   not one is compiled in. A state adds "mismatch" to the lut's: an intact
+   model trained behind a different colour table than the one running. Its
+   inputs would come from other pixels than it learned from, so it is left
+   out and the stage falls back. */
 static blob_clf_t  s_clf_rec;         /* as the record holds it               */
 static blob_clf_t  s_clf;             /* what runs: s_clf_rec with '!thr2'    */
-#endif
-/* '!thr2 N': the classifier's threshold in hundredths, 0 = the model's own.
-   The threshold trades lost balloons against false ones, and the right trade
+static blob_cnn_t  s_cnn_rec;         /* likewise; ~5 kB each, so static      */
+static blob_cnn_t  s_cnn;
+/* '!thr2 N' / '!thr3 N': the thresholds in hundredths, 0 = the model's own.
+   A threshold trades lost balloons against false ones, and the right trade
    depends on the venue's clutter, so it is a setting (saved by !save) rather
    than something only retraining can change. */
-static int         s_thr2;
-static const char *s_clf_state = "none";
-static uint32_t    s_clf_id;          /* its train id; #!CFG clf_id=          */
+static int         s_thr2, s_thr3;
+static const char *s_clf_state = "none", *s_cnn_state = "none";
+static uint32_t    s_clf_id, s_cnn_id;    /* #!CFG clf_id= cnn_id=            */
+/* Where each running model came from: "build" (main/models, compiled in),
+   "upload" (!upload, model_store.h) or "none". #!CFG lut_src= clf_src= ... */
+static const char *s_lut_src = "none", *s_clf_src = "none", *s_cnn_src = "none";
 
-/* s_clf = the record's classifier with the '!thr2' threshold, if one is set.
-   Called whenever either changes; with no classifier built in it only keeps
-   the setting. */
+static void reload_models(void);       /* below: needs every loader         */
+
+/* The records compiled in; NULL where main/models holds a placeholder. */
+#ifdef CLF_MODEL_NONE
+#define CLF_BUILD_REC   NULL
+#define CLF_BUILD_LEN   0
+#else
+#define CLF_BUILD_REC   clf_model_rec
+#define CLF_BUILD_LEN   sizeof clf_model_rec
+#endif
+#ifdef CNN_MODEL_NONE
+#define CNN_BUILD_REC   NULL
+#define CNN_BUILD_LEN   0
+#else
+#define CNN_BUILD_REC   cnn_model_rec
+#define CNN_BUILD_LEN   sizeof cnn_model_rec
+#endif
+
+/* s_clf / s_cnn = the record's model with the '!thr2' / '!thr3' threshold,
+   if one is set. Called whenever either changes. */
 static void apply_thr2(void)
 {
-#ifndef CLF_MODEL_NONE
     s_clf = s_clf_rec;
     if (s_thr2 > 0) s_clf.threshold = (float)s_thr2 / 100.0f;
-#endif
 }
-
-/* The threshold stage 2 runs with, or -1 with no classifier running. */
-static float clf_threshold(void)
-{
-#ifndef CLF_MODEL_NONE
-    if (s_models.clf != NULL) return s_clf.threshold;
-#endif
-    return -1.0f;
-}
-static const char *s_cnn_state = "none";
-static uint32_t    s_cnn_id;          /* its train id; #!CFG cnn_id=          */
-/* The CNN as the record holds it, and as it runs ('!thr3'). Static: about
-   5 kB each, and blob_cnn_load() wants somewhere to put the network. */
-#ifndef CNN_MODEL_NONE
-static blob_cnn_t  s_cnn_rec;
-static blob_cnn_t  s_cnn;
-#endif
-static int         s_thr3;            /* '!thr3': hundredths, 0 = the model's */
 
 static void apply_thr3(void)
 {
-#ifndef CNN_MODEL_NONE
     s_cnn = s_cnn_rec;
     if (s_thr3 > 0) s_cnn.threshold = (float)s_thr3 / 100.0f;
-#endif
 }
 
-/* The threshold stage 3 runs with, or -1 with no CNN running. */
+/* The thresholds stages 2 and 3 run with, or -1 with the model not running. */
+static float clf_threshold(void)
+{
+    return s_models.clf != NULL ? s_clf.threshold : -1.0f;
+}
+
 static float cnn_threshold(void)
 {
-#ifndef CNN_MODEL_NONE
-    if (s_models.cnn != NULL) return s_cnn.threshold;
-#endif
-    return -1.0f;
+    return s_models.cnn != NULL ? s_cnn.threshold : -1.0f;
 }
 
 /* Busy time of the previous loop iteration, from waking up to the end of its
@@ -658,7 +661,8 @@ static void print_cfg(void)
            "fov=%.1f fps=%.3g period_ms=%.1f sensor_us=%.0f awb=%d wb=%s "
            "wb_gain=%d,%d,%d wb_fixed=%d,%d,%d be=%d preset=%s baud=%d image=%d stream=%d settings=%s stage=%d stage_eff=%d lut=%s lut_id=%u "
            "clf=%s cnn=%s cnn_k=%d csv=%d fw=%s collect=%d fv=%d flip=%d clf_id=%u "
-           "thr2=%d clf_thr=%.2f cnn_id=%u thr3=%d cnn_thr=%.2f\n",
+           "thr2=%d clf_thr=%.2f cnn_id=%u thr3=%d cnn_thr=%.2f lut_src=%s clf_src=%s "
+           "cnn_src=%s upload=%d\n",
            FRAME_W, FRAME_H, s_cfg.cell, s_cfg.hue, s_cfg.hue_tol, s_cfg.sat_min,
            s_cfg.val_min, s_cfg.min_area, s_target_mm, s_hfov_deg, frame_fps(),
            period_ms(), s_sensor_us, s_wb, wb_name(s_wb), g[0], g[1], g[2],
@@ -669,7 +673,8 @@ static void print_cfg(void)
            s_lut_state, (unsigned)s_lut_id, s_clf_state, s_cnn_state, s_cnn_k, CSV_VERSION,
            esp_app_get_description()->version, s_collect ? 1 : 0, BLOB_FEAT_VERSION,
            s_flip ? 1 : 0, (unsigned)s_clf_id, s_thr2, (double)clf_threshold(),
-           (unsigned)s_cnn_id, s_thr3, (double)cnn_threshold());
+           (unsigned)s_cnn_id, s_thr3, (double)cnn_threshold(), s_lut_src, s_clf_src,
+           s_cnn_src, ms_available() ? 1 : 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -728,6 +733,8 @@ static void print_banner(void)
     printf("#              !thr2 <0-99> classifier threshold, hundredths (0 = the model's)\n");
     printf("#              !thr3 <0-99> CNN threshold | !cnnk <1-4> blobs the CNN checks | "
            "!cnnbench [16|24] time the CNN\n");
+    printf("#              !dump <lut|clf|cnn> send a model | !upload <kind> <len> <crc> "
+           "store one | !unload <kind|all>\n");
     printf("# columns      t_ms,ok,cx_px,cy_px,az_deg,el_deg,area_px,w_px,h_px,"
            "fill,range_mm,clipped,blobs,matched_px,b2_az,b2_el,b2_range_mm,"
            "b3_az,b3_el,b3_range_mm,b4_az,b4_el,b4_range_mm,dt_ms,proc_us,"
@@ -921,9 +928,7 @@ static cmd_res_t run_cnnbench_command(const char *line)
     }
     static blob_cnn_t dummy;
     const blob_cnn_t *net = NULL;
-#ifndef CNN_MODEL_NONE
     if (s_models.cnn != NULL && (n == 0 || n == s_cnn.n)) net = &s_cnn;
-#endif
     if (net == NULL) {
         static const int ch[3] = { 8, 16, 16 };
         memset(&dummy, 0, sizeof dummy);
@@ -955,6 +960,201 @@ static cmd_res_t run_cnnbench_command(const char *line)
            macs, per, per * CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ / (double)macs,
            net == &dummy ? "dummy" : "built-in");
     return CMD_OK;
+}
+
+/* Phase D: model records over the link (model_store.h). '!dump' and
+   '!upload' are served by the main loop (serve_model_transfer), after the
+   command's #!ACK, so the PC never mistakes a packet or a "ready" for the
+   reply, and sends an upload's bytes only once the slot is erased. */
+static int      s_dump = -1;          /* kind to send, or -1                  */
+static struct {
+    int      kind;                    /* -1 = none pending                    */
+    uint32_t len, crc;
+} s_up = { -1, 0, 0 };
+
+static bool kind_arg(const char *a, int *k)
+{
+    while (*a == ' ') a++;
+    *k = ms_kind(a);
+    return *k >= 0;
+}
+
+/* '!dump <lut|clf|cnn>': send the record of the model that is running, as a
+   #!MODEL packet, so the PC can keep a copy of what the camera really holds
+   (the Firmware tab's backup), not of what main/models says it should. */
+static cmd_res_t run_dump_command(const char *line)
+{
+    int k;
+    if (line[5] != ' ' || !kind_arg(line + 6, &k)) {
+        snprintf(s_why, sizeof s_why, "usage: !dump <lut|clf|cnn>");
+        return CMD_NAK;
+    }
+    s_dump = k;
+    return CMD_OK;
+}
+
+/* '!upload <lut|clf|cnn> <len> <crc hex>': the next len bytes are a model
+   record with that CRC-32. A whole word, as every command that writes flash
+   is, and checked three times: the transfer's CRC, then the record's own
+   checks in the loader, then the table binding. */
+static cmd_res_t run_upload_command(const char *line)
+{
+    char kind[8];
+    unsigned long len, crc;
+    int used = 0;
+    if (line[7] != ' ' || sscanf(line + 8, "%7s %lu %lx%n", kind, &len, &crc, &used) != 3 ||
+        line[8 + used] != '\0') {
+        snprintf(s_why, sizeof s_why, "usage: !upload <lut|clf|cnn> <len> <crc32 hex>");
+        return CMD_NAK;
+    }
+    int k = ms_kind(kind);
+    if (k < 0) {
+        snprintf(s_why, sizeof s_why, "kind must be lut, clf or cnn");
+        return CMD_NAK;
+    }
+    if (!ms_available()) {
+        snprintf(s_why, sizeof s_why, "no 'tcmodels' partition: rebuild and flash");
+        return CMD_NAK;
+    }
+    if (len < TC_MODEL_HDR_BYTES || len > ms_capacity((ms_kind_t)k)) {
+        snprintf(s_why, sizeof s_why, "len out of range (%d..%u)", TC_MODEL_HDR_BYTES,
+                 (unsigned)ms_capacity((ms_kind_t)k));
+        return CMD_NAK;
+    }
+    s_up.kind = k;
+    s_up.len = (uint32_t)len;
+    s_up.crc = (uint32_t)crc;
+    return CMD_OK;
+}
+
+/* '!unload <lut|clf|cnn|all>': erase upload slots; the compiled-in models
+   run again at once. */
+static cmd_res_t run_unload_command(const char *line)
+{
+    int k = -1;
+    bool all = strcmp(line, "!unload all") == 0;
+    if (!all && (line[7] != ' ' || !kind_arg(line + 8, &k))) {
+        snprintf(s_why, sizeof s_why, "usage: !unload <lut|clf|cnn|all>");
+        return CMD_NAK;
+    }
+    if (!ms_available()) {
+        snprintf(s_why, sizeof s_why, "no 'tcmodels' partition: nothing is uploaded");
+        return CMD_NAK;
+    }
+    for (int i = 0; i < MS_KINDS; i++) {
+        if ((all || i == k) && ms_erase((ms_kind_t)i) != ESP_OK) {
+            snprintf(s_why, sizeof s_why, "flash erase failed (%s)", ms_name((ms_kind_t)i));
+            return CMD_NAK;
+        }
+    }
+    printf("# unloaded %s: the build's models run again\n", all ? "all" : ms_name((ms_kind_t)k));
+    reload_models();
+    return CMD_OK;
+}
+
+/* The record of a running model: the upload slot's (mapped; *mapped set) or
+   the build's. NULL when none of that kind runs. */
+static const uint8_t *running_record(int k, size_t *len, esp_partition_mmap_handle_t *h,
+                                     bool *mapped, const char **src)
+{
+    const char *srcs[MS_KINDS] = { s_lut_src, s_clf_src, s_cnn_src };
+    *src = srcs[k];
+    *mapped = false;
+    if (strcmp(*src, "upload") == 0) {
+        const uint8_t *r = ms_map((ms_kind_t)k, len, h);
+        *mapped = r != NULL;
+        return r;
+    }
+    if (strcmp(*src, "build") != 0) return NULL;
+    if (k == MS_LUT) { *len = sizeof lut_model_rec; return lut_model_rec; }
+    if (k == MS_CLF) { *len = CLF_BUILD_LEN; return CLF_BUILD_REC; }
+    *len = CNN_BUILD_LEN;
+    return CNN_BUILD_REC;
+}
+
+static void upload_refused(int k, const char *why)
+{
+    ms_erase((ms_kind_t)k);
+    printf("#!UPLOAD refused kind=%s reason=%s\n", ms_name((ms_kind_t)k), why);
+}
+
+static void serve_model_transfer(void)
+{
+    if (s_dump >= 0) {
+        int k = s_dump;
+        s_dump = -1;
+        size_t len = 0;
+        esp_partition_mmap_handle_t h;
+        bool mapped;
+        const char *src;
+        const uint8_t *rec = running_record(k, &len, &h, &mapped, &src);
+        if (rec == NULL) {
+            printf("#!MODEL none kind=%s src=%s\n", ms_name((ms_kind_t)k), src);
+        } else {
+            char fields[64];
+            snprintf(fields, sizeof fields, "kind=%s src=%s", ms_name((ms_kind_t)k), src);
+            link_send_packet("MODEL", fields, rec, len);
+            if (mapped) ms_unmap(h);
+        }
+        fflush(stdout);
+    }
+    if (s_up.kind < 0) return;
+    int k = s_up.kind;
+    uint32_t len = s_up.len, want = s_up.crc;
+    s_up.kind = -1;
+    if (ms_erase((ms_kind_t)k) != ESP_OK) {
+        printf("#!UPLOAD refused kind=%s reason=erase\n", ms_name((ms_kind_t)k));
+        return;
+    }
+    printf("#!UPLOAD ready kind=%s len=%u\n", ms_name((ms_kind_t)k), (unsigned)len);
+    fflush(stdout);
+    /* The bytes go to flash as they arrive: no 16 kB buffer in DRAM. A
+       256-byte write takes well under a millisecond, far less than the UART
+       ring buffer holds at any speed the link uses. */
+    int64_t deadline = esp_timer_get_time() +
+                       (int64_t)len * 10 * 1000000 / link_baud() * 3 / 2 + 3000000;
+    uint8_t chunk[256];
+    uint32_t got = 0, crc = 0;
+    while (got < len && esp_timer_get_time() < deadline) {
+        size_t want_n = len - got < sizeof chunk ? len - got : sizeof chunk;
+        int n = uart_read_bytes(UART_NUM_0, chunk, want_n, pdMS_TO_TICKS(100));
+        if (n <= 0) continue;
+        crc = tc_crc32_update(crc, chunk, (size_t)n);
+        if (ms_write((ms_kind_t)k, got, chunk, (size_t)n) != ESP_OK) {
+            upload_refused(k, "write");
+            return;
+        }
+        got += (uint32_t)n;
+    }
+    char why[48];
+    if (got < len) {
+        snprintf(why, sizeof why, "timeout_%u_of_%u", (unsigned)got, (unsigned)len);
+        upload_refused(k, why);
+        return;
+    }
+    if (crc != want) {
+        upload_refused(k, "crc");
+        return;
+    }
+    if (ms_commit((ms_kind_t)k, len) != ESP_OK) {
+        upload_refused(k, "commit");
+        return;
+    }
+    reload_models();
+    const char *srcs[MS_KINDS] = { s_lut_src, s_clf_src, s_cnn_src };
+    const char *states[MS_KINDS] = { s_lut_state, s_clf_state, s_cnn_state };
+    uint32_t ids[MS_KINDS] = { s_lut_id, s_clf_id, s_cnn_id };
+    if (strcmp(srcs[k], "upload") != 0) {
+        /* The loader refused it (the reason is in the log above): the slot
+           is erased, so the build's model is not shadowed at the next boot. */
+        upload_refused(k, "record");
+        reload_models();
+        return;
+    }
+    printf("#!UPLOAD ok kind=%s id=%u state=%s\n", ms_name((ms_kind_t)k), (unsigned)ids[k],
+           states[k]);
+    print_cfg();
+    fflush(stdout);
 }
 
 /* '!collect 0|1'. A whole word for the same reason as !stage: it slows the
@@ -1077,6 +1277,15 @@ static cmd_res_t run_command(const char *line)
         }
         if (strncmp(line, "!cnnbench", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) {
             return run_cnnbench_command(line);
+        }
+        if (strncmp(line, "!dump", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+            return run_dump_command(line);
+        }
+        if (strncmp(line, "!upload", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+            return run_upload_command(line);
+        }
+        if (strncmp(line, "!unload", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
+            return run_unload_command(line);
         }
         return run_store_command(line);
     case 'c':
@@ -1558,73 +1767,118 @@ static void boot_report(void)
     fflush(stdout);
 }
 
-/* Check the compiled-in models and take the ones that pass. A refused model
-   is reported and left out, so the camera runs the stages below it rather
-   than a table it cannot trust. */
-static void load_models(void)
+/* One kind of model, from the upload slot if it holds one that passes the
+   loader, else from the build. A refused upload is reported and the build's
+   model used instead: a damaged slot must not take a stage away that the
+   firmware itself can still run. Returns the source; *err is the build
+   record's verdict when it was tried. */
+typedef tc_model_err_t (*model_load_fn)(const uint8_t *rec, size_t len, uint32_t *id);
+
+static tc_model_err_t try_lut(const uint8_t *rec, size_t len, uint32_t *id)
+{
+    return color_lut_load(rec, len, s_lut, id);
+}
+
+static tc_model_err_t try_clf(const uint8_t *rec, size_t len, uint32_t *id)
+{
+    return blob_clf_load(rec, len, &s_clf_rec, id);
+}
+
+static tc_model_err_t try_cnn(const uint8_t *rec, size_t len, uint32_t *id)
+{
+    return blob_cnn_load(rec, len, &s_cnn_rec, id);
+}
+
+static const char *load_one(ms_kind_t k, const uint8_t *build, size_t build_len,
+                            model_load_fn fn, uint32_t *id, tc_model_err_t *err)
+{
+    *err = TC_MODEL_OK;
+    esp_partition_mmap_handle_t h;
+    size_t len;
+    const uint8_t *rec = ms_map(k, &len, &h);
+    if (rec != NULL) {
+        tc_model_err_t e = fn(rec, len, id);
+        ms_unmap(h);
+        if (e == TC_MODEL_OK) return "upload";
+        printf("# models        uploaded %s REFUSED (%s): using the build's\n", ms_name(k),
+               tc_model_err_str(e));
+    }
+    if (build == NULL) return "none";
+    *err = fn(build, build_len, id);
+    return *err == TC_MODEL_OK ? "build" : "bad";
+}
+
+/* (Re)load every model: at boot, and after an upload or unload, so a new
+   model runs at once and the table-binding checks are made again (a new
+   table makes the old classifier a mismatch until it is replaced too). */
+static void reload_models(void)
 {
     uint32_t id = 0;
-    tc_model_err_t e = color_lut_load(lut_model_rec, sizeof lut_model_rec, s_lut, &id);
-    if (e == TC_MODEL_OK) {
+    tc_model_err_t e;
+    s_models.lut = NULL;
+    s_models.clf = NULL;
+    s_models.cnn = NULL;
+    s_lut_id = s_clf_id = s_cnn_id = 0;
+
+    s_lut_src = load_one(MS_LUT, lut_model_rec, sizeof lut_model_rec, try_lut, &id, &e);
+    if (strcmp(s_lut_src, "build") == 0 || strcmp(s_lut_src, "upload") == 0) {
         s_models.lut = s_lut;
         s_lut_state = "ok";
         s_lut_id = id;
-        printf("# models        colour table ok: id %u, %d colours accepted, %u B in DRAM\n",
-               (unsigned)id, color_lut_count(s_lut), (unsigned)sizeof s_lut);
+        printf("# models        colour table ok (%s): id %u, %d colours accepted, %u B in DRAM\n",
+               s_lut_src, (unsigned)id, color_lut_count(s_lut), (unsigned)sizeof s_lut);
     } else {
-        s_lut_state = "bad";
-        printf("# models        colour table REFUSED (%s): stage 1 and above unavailable\n",
-               tc_model_err_str(e));
+        s_lut_state = s_lut_src;
+        printf("# models        colour table %s (%s): stage 1 and above unavailable\n",
+               strcmp(s_lut_src, "bad") == 0 ? "REFUSED" : "absent", tc_model_err_str(e));
     }
-#ifdef CLF_MODEL_NONE
-    printf("# models        no blob classifier built in: stage 2 unavailable\n");
-#else
-    e = blob_clf_load(clf_model_rec, sizeof clf_model_rec, &s_clf_rec, &id);
-    s_clf = s_clf_rec;
-    if (e != TC_MODEL_OK) {
+
+    s_clf_src = load_one(MS_CLF, CLF_BUILD_REC, CLF_BUILD_LEN, try_clf, &id, &e);
+    if (strcmp(s_clf_src, "none") == 0) {
+        s_clf_state = "none";
+        printf("# models        no blob classifier: stage 2 unavailable\n");
+    } else if (strcmp(s_clf_src, "bad") == 0) {
         s_clf_state = "bad";
         printf("# models        blob classifier REFUSED (%s): stage 2 unavailable\n",
                tc_model_err_str(e));
     } else if (s_models.lut == NULL || s_clf_rec.lut_id != s_lut_id) {
         s_clf_state = "mismatch";
         s_clf_id = id;
-        printf("# models        blob classifier id %u was trained behind colour table %u, "
-               "not this one (%s %u): stage 2 unavailable\n", (unsigned)id,
+        printf("# models        blob classifier id %u (%s) was trained behind colour table %u, "
+               "not this one (%s %u): stage 2 unavailable\n", (unsigned)id, s_clf_src,
                (unsigned)s_clf_rec.lut_id, s_lut_state, (unsigned)s_lut_id);
     } else {
         s_models.clf = &s_clf;
-        apply_thr2();
         s_clf_state = "ok";
         s_clf_id = id;
-        printf("# models        blob classifier ok: id %u, threshold %.3f, behind table %u\n",
-               (unsigned)id, (double)s_clf_rec.threshold, (unsigned)s_clf_rec.lut_id);
+        printf("# models        blob classifier ok (%s): id %u, threshold %.3f, behind table %u\n",
+               s_clf_src, (unsigned)id, (double)s_clf_rec.threshold, (unsigned)s_clf_rec.lut_id);
     }
-#endif
-#ifdef CNN_MODEL_NONE
-    printf("# models        no crop CNN built in: stage 3 unavailable\n");
-#else
-    e = blob_cnn_load(cnn_model_rec, sizeof cnn_model_rec, &s_cnn_rec, &id);
-    s_cnn = s_cnn_rec;
-    if (e != TC_MODEL_OK) {
+
+    s_cnn_src = load_one(MS_CNN, CNN_BUILD_REC, CNN_BUILD_LEN, try_cnn, &id, &e);
+    if (strcmp(s_cnn_src, "none") == 0) {
+        s_cnn_state = "none";
+        printf("# models        no crop CNN: stage 3 unavailable\n");
+    } else if (strcmp(s_cnn_src, "bad") == 0) {
         s_cnn_state = "bad";
         printf("# models        crop CNN REFUSED (%s): stage 3 unavailable\n",
                tc_model_err_str(e));
     } else if (s_models.lut == NULL || s_cnn_rec.lut_id != s_lut_id) {
         s_cnn_state = "mismatch";
         s_cnn_id = id;
-        printf("# models        crop CNN id %u was trained behind colour table %u, not this "
-               "one (%s %u): stage 3 unavailable\n", (unsigned)id,
+        printf("# models        crop CNN id %u (%s) was trained behind colour table %u, not "
+               "this one (%s %u): stage 3 unavailable\n", (unsigned)id, s_cnn_src,
                (unsigned)s_cnn_rec.lut_id, s_lut_state, (unsigned)s_lut_id);
     } else {
         s_models.cnn = &s_cnn;
-        apply_thr3();
         s_cnn_state = "ok";
         s_cnn_id = id;
-        printf("# models        crop CNN ok: id %u, %dx%d input, %ld multiply-adds per crop, "
-               "threshold %.3f\n", (unsigned)id, s_cnn_rec.n, s_cnn_rec.n,
+        printf("# models        crop CNN ok (%s): id %u, %dx%d input, %ld multiply-adds per "
+               "crop, threshold %.3f\n", s_cnn_src, (unsigned)id, s_cnn_rec.n, s_cnn_rec.n,
                blob_cnn_macs(&s_cnn_rec), (double)s_cnn_rec.threshold);
     }
-#endif
+    apply_thr2();
+    apply_thr3();
     s_models.cnn_k = s_cnn_k;
     fflush(stdout);
 }
@@ -1704,7 +1958,11 @@ void app_main(void)
     }
     fflush(stdout);
 
-    load_models();
+    if (!ms_init()) {
+        printf("# models        no 'tcmodels' partition in this build's partition table: "
+               "!upload unavailable, compiled-in models only\n");
+    }
+    reload_models();
 
     if (!blob_cfg_valid(&s_cfg)) {
         ESP_LOGE(TAG, "detector configuration is invalid for a %dx%d frame",
@@ -1721,7 +1979,9 @@ void app_main(void)
     }
 
     /* Take over UART0 so reads can be non-blocking. stdout keeps working. */
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 256, 0, 0, NULL, 0));
+    /* 1 kB of receive buffer: an '!upload' streams up to 16 kB, written to
+       flash 256 bytes at a time while the rest waits here. */
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0));
     link_init();
 
     escape_hatch_delay();
@@ -1826,6 +2086,7 @@ void app_main(void)
             continue;
         }
 
+        serve_model_transfer();
         if (s_calibrate) {
             s_calibrate = false;
             calibrate(fb->buf);

@@ -323,6 +323,15 @@ class MainWindow(QMainWindow):
             self.calib.on_cal(ev)
         elif isinstance(ev, P.WbCal):
             self.calib.on_wbcal(ev)
+        elif isinstance(ev, (P.ModelRec, P.ModelNone)):
+            self._say("#!MODEL %s kind=%s src=%s%s" % (
+                "none" if isinstance(ev, P.ModelNone) else "packet", ev.kind, ev.src,
+                "" if isinstance(ev, P.ModelNone) else " (%d bytes)" % len(ev.data)))
+            self.firmware.on_model(ev)
+        elif isinstance(ev, P.Upload):
+            self._say("#!UPLOAD %s %s" % (ev.status, " ".join("%s=%s" % kv
+                                                              for kv in ev.v.items())))
+            self.firmware.on_upload(ev)
         elif isinstance(ev, P.CnnBench):
             self._say("#!CNNBENCH " + " ".join("%s=%s" % kv for kv in ev.v.items()))
             self.calib.on_cnnbench(ev)

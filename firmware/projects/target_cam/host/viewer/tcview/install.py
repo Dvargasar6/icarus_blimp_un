@@ -28,6 +28,7 @@ ESP-IDF has lived at different paths (~/.espressif/v5.5.5 in CLAUDE.md,
 from __future__ import annotations
 
 import filecmp
+import json
 import shlex
 import shutil
 import time
@@ -227,6 +228,30 @@ def flash_command(activate: Path, port: str, build: Path = BUILD_DIR) -> list:
                    % (shlex.quote(str(build)), shlex.quote(port)))
 
 
+def stale_sdkconfig(project: Path = Lib.TARGET_CAM) -> list:
+    """Settings sdkconfig.defaults asks for that the existing sdkconfig does not
+    have. idf.py applies the defaults only when it creates sdkconfig, so an
+    old one keeps, for instance, the partition table without 'tcmodels'.
+    [] when there is no sdkconfig (the build makes one) or nothing differs."""
+    cfg, dfl = project / "sdkconfig", project / "sdkconfig.defaults"
+    if not cfg.exists() or not dfl.exists():
+        return []
+    have = set(l.strip() for l in cfg.read_text().splitlines())
+    want = [l.strip() for l in dfl.read_text().splitlines()
+            if l.strip().startswith("CONFIG_") and "=" in l]
+    return [w for w in want if w not in have]
+
+
+def regenerate_sdkconfig(project: Path = Lib.TARGET_CAM) -> Path:
+    """Move sdkconfig to sdkconfig.old, so the next build makes it again from
+    sdkconfig.defaults (CLAUDE.md: persistent settings live there, sdkconfig is
+    generated and git-ignored). The old file stays for comparison."""
+    cfg = project / "sdkconfig"
+    old = project / "sdkconfig.old"
+    cfg.replace(old)
+    return old
+
+
 def build_has(fw: Path = Lib.FIRMWARE_MODELS, app: Path = APP_BIN) -> Optional[bool]:
     """True if the image holds main/models' table and classifier (or no
     classifier, when none is installed), False if not, None with no build."""
@@ -292,3 +317,110 @@ def camera_verdict(cfg: dict, want: Installed) -> tuple[str, str]:
         return "warn", head + " — the table is right, but the camera still has a " \
             "classifier: flash the latest build."
     return "ok", head + " — the installed table (no classifier: stage 1)."
+
+
+# ---- the camera's own models (Phase D: !dump / !upload) ----------------------
+
+def record_header(kind: str, rec: bytes, note: str) -> str:
+    """A <kind>_model.h for a record read back from the camera: the same bytes
+    as a C array, as the trainers write it, so the set can be installed."""
+    name = "%s_model_rec" % kind
+    lines = [", ".join("0x%02x" % x for x in rec[i:i + 16]) for i in range(0, len(rec), 16)]
+    return ("/*\n * %s model record read back from the camera (!dump), %s.\n * The same "
+            "bytes as %s_model.bin.\n */\n#pragma once\n\n#include <stdint.h>\n\n"
+            "static const uint8_t %s[%d] = {\n    %s,\n};\n"
+            % (kind, note, kind, name, len(rec), ",\n    ".join(lines)))
+
+
+def record_meta(kind: str, rec: bytes) -> dict:
+    """What a record says about itself, in the trainers' .json keys, checked
+    by the C loaders (ModelError if the camera sent something broken)."""
+    if kind == "lut":
+        m = D.lut_models(record=rec)
+        import numpy as np
+        return dict(train_id=m.lut_id,
+                    colours=int(np.unpackbits(np.frombuffer(rec[20:], np.uint8)).sum()))
+    if kind == "clf":
+        c, tid = D.load_clf(rec)
+        return dict(train_id=tid, lut_id=c.lut_id, threshold=round(float(c.threshold), 4))
+    c, tid = D.load_cnn(rec)
+    return dict(train_id=tid, lut_id=c.lut_id, threshold=round(float(c.threshold), 4), n=c.n,
+                macs=D.cnn_macs(c))
+
+
+def find_same(records: dict, models: Path = Lib.MODELS_DIR) -> str:
+    """A set under models/ holding exactly these records (and no others)."""
+    if not models.is_dir():
+        return ""
+    for d in sorted(models.iterdir()):
+        if not d.is_dir():
+            continue
+        if all(((d / ("%s_model.bin" % k)).exists() and
+                (d / ("%s_model.bin" % k)).read_bytes() == records[k]) if k in records
+               else not (d / ("%s_model.bin" % k)).exists() for k in Lib.KINDS):
+            return d.name
+    return ""
+
+
+def save_camera_models(records: dict, sources: dict, models: Path = Lib.MODELS_DIR,
+                       now: Optional[float] = None) -> tuple:
+    """Keep what the camera runs: a set models/camera_<lut_id>_<date>/ with
+    the records it sent, unless a set already holds exactly those bytes.
+    Returns (set name, True if it was written now). records: kind -> bytes."""
+    same = find_same(records, models)
+    if same:
+        return same, False
+    meta = {k: record_meta(k, r) for k, r in records.items()}
+    lut_id = meta.get("lut", {}).get("train_id", 0)
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
+    out = models / ("camera_%s_%s" % (lut_id or "nolut", stamp))
+    out.mkdir(parents=True)
+    note = "%s, %s" % (stamp, ", ".join("%s from its %s" % (k, sources.get(k, "?"))
+                                        for k in records))
+    for k, rec in records.items():
+        (out / ("%s_model.bin" % k)).write_bytes(rec)
+        (out / ("%s_model.h" % k)).write_text(record_header(k, rec, note))
+        m = dict(meta[k], source="read back from the camera with !dump",
+                 camera_src=sources.get(k, "?"), sessions=[])
+        (out / ("%s_model.json" % k)).write_text(json.dumps(m, indent=1) + "\n")
+    return out.name, True
+
+
+def upload_plan(s: Lib.ModelSet, cfg: dict) -> list:
+    """The camera commands that make set s the camera's models without a
+    flash: '!upload' each of its records, table first (a new table makes the
+    old classifier a mismatch until the new one arrives), and '!unload' the
+    uploaded models of kinds the set does not have, so no model of another
+    set stays behind. Steps: ("upload", kind, bytes) or ("unload", kind)."""
+    plan = []
+    for k in Lib.KINDS:
+        if s.has(k):
+            plan.append(("upload", k, s.bin(k).read_bytes()))
+        elif cfg.get("%s_src" % k) == "upload":
+            plan.append(("unload", k))
+    return plan
+
+
+def upload_command(kind: str, rec: bytes) -> str:
+    import zlib
+    return "!upload %s %d %08x" % (kind, len(rec), zlib.crc32(rec) & 0xFFFFFFFF)
+
+
+def upload_verdict(cfg: dict, s: Lib.ModelSet) -> tuple:
+    """(tone, text): does the camera now run set s's models?"""
+    c = camera_ids(cfg)
+    want = s.ids()
+    bad = []
+    if c["lut_id"] != want.get("lut"):
+        bad.append("table %d, not %s" % (c["lut_id"], want.get("lut")))
+    for k in ("clf", "cnn"):
+        if k in want and (c[k] != "ok" or c["%s_id" % k] != want[k]):
+            bad.append("%s %s id %d, not %s" % (k, c[k], c["%s_id" % k], want[k]))
+    srcs = " · ".join("%s from %s" % (k, cfg.get("%s_src" % k, "?")) for k in Lib.KINDS)
+    if bad:
+        return "err", "The camera does not run %s: %s (%s)." % (s.name, "; ".join(bad), srcs)
+    top = max(s.stages)
+    return "ok", ("The camera runs %s (%s), kept in its model partition across power "
+                  "cycles and reflashes: an uploaded model wins over the build's until "
+                  "!unload. To use it: !stage %d, then !save. main/models is unchanged."
+                  % (s.name, srcs, top))

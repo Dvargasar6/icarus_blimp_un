@@ -1034,3 +1034,53 @@ Orange and pink balloons are painted as background, as §9.2 planned.
 - Whether the CNN separates the balloons with enough sessions under equal
   gains. Nothing here says it does or does not.
 - The temperature with stage 3 running for ten minutes or more.
+
+---
+
+## 13. Phase D: model records over the link (2026-10-29)
+
+### 13.1 What was built
+
+- **A flash partition of its own, `tcmodels`** (64 kB at 0x110000, after the
+  app; `partitions.csv`), not NVS: the settings NVS partition is 24 kB, the
+  colour table record alone is 8 kB, and NVS needs room for the new copy of
+  a blob before it drops the old one. One slot per model (lut 16 kB, clf
+  4 kB, cnn 16 kB), each a length then the record; an erased slot reads as
+  empty, and the length is written last, so a transfer that stops halfway
+  leaves a slot that reads as empty (`main/model_store.{c,h}`). The table
+  keeps nvs, phy_init and the app where they were, so the saved settings
+  survive the first flash with it.
+- **Firmware**: `reload_models()` takes each model from its slot if it
+  passes the same loader as a compiled-in record, else from the build, at
+  boot and after every upload or unload (`#!CFG lut_src= clf_src= cnn_src=
+  upload=`). `!dump <kind>` sends the running record as a `#!MODEL` packet
+  (same framing and CRC as frames). `!upload <kind> <len> <crc>` erases the
+  slot, answers `#!UPLOAD ready`, writes the raw bytes to flash as they
+  arrive (256 B at a time; the UART receive buffer was raised to 1 kB),
+  then checks the transfer CRC, the record and the table binding, and runs
+  the model at once or refuses and erases. `!unload` erases slots.
+- **tcview's Firmware tab**: back up the camera's models (`!dump` → a set
+  `models/camera_<lut_id>_<date>/`, unless one holds those bytes), upload a
+  set (backup first; table, classifier, CNN; unload uploaded kinds the set
+  lacks; check `#!CFG`), unload. Install backs the camera's models up first
+  when a camera is connected, which is the user's requirement that what the
+  micro holds is never lost. Flash unloads uploaded models first: they
+  survive a reflash and would shadow the models just built.
+
+### 13.2 Measured (PC)
+
+- The firmware builds without warnings with and without a classifier and a
+  CNN compiled in; DRAM use 88 kB of 181 kB (49 %).
+- The regenerated `sdkconfig` differs from the old one only in the partition
+  table (checked with a diff).
+- The new tests pass: the protocol at any chunking (and a damaged `#!MODEL`
+  dropped), the backup kept once, the upload plan, and the whole tab against
+  the fake camera on a pty (backup, upload, check, unload, a refused upload,
+  unload before flash). The fake camera follows the firmware's sequence
+  (ACK, ready, raw bytes, ok/refused).
+
+### 13.3 Not established
+
+- Nothing has run on the board: the partition, the upload at 115200 (8 212 B
+  should take about 0.75 s), and whether the 1 kB receive buffer holds while
+  flash writes run (reasoned: a 256 B write takes well under a millisecond).

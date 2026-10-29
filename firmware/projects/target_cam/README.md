@@ -375,6 +375,31 @@ It takes minutes, not seconds (one network per held-out session, plus the
 final one). Install the set with tcview's Firmware tab, then `!stage 3` and
 `!save`; `!thr3 <0-99>` moves the threshold without retraining.
 
+## Models over the link (phase D): `!dump`, `!upload`, `!unload`
+
+Retraining at the venue should not need a rebuild and a reflash with BOOT
+held. The camera keeps uploaded model records in a flash partition of their
+own, **`tcmodels`** (64 kB after the app, `partitions.csv`; `main/model_store.h`
+explains why not NVS), one slot per model. At boot, and after every upload or
+unload, each model is taken from its slot if it holds one that passes the same
+checks as a compiled-in record, else from the build; `#!CFG` says which
+(`lut_src=`, `clf_src=`, `cnn_src=`: `build`, `upload` or `none`; `upload=1`
+when the partition exists). **An uploaded model survives power cycles and
+reflashes and wins over the build's until `!unload`**; tcview's Flash does
+`!unload all` first for that reason.
+
+| Command | Effect |
+|---|---|
+| `!dump <lut\|clf\|cnn>` | Send the record of the model that runs, as a `#!MODEL seq= kind= src= len= crc=` packet (framed like `#!FRAME`), or `#!MODEL none kind= src=`. tcview keeps these as `models/camera_<lut_id>_<date>/`: the backup of what the micro really holds. |
+| `!upload <lut\|clf\|cnn> <len> <crc32>` | After `#!ACK`, the camera erases the slot and answers `#!UPLOAD ready`; the PC then sends exactly `len` raw bytes. They go to flash as they arrive (no 16 kB buffer in RAM), the length is written last, and the CRC, then the record's own checks, decide `#!UPLOAD ok kind= id= state=` or `#!UPLOAD refused reason=` (the slot is erased again). The model runs at once. |
+| `!unload <lut\|clf\|cnn\|all>` | Erase slots: the build's models run again at once. |
+
+**Once, to get the partition:** a board flashed before phase D has the old
+partition table, so `#!CFG` lacks `upload=` (or says `upload=0`). Build with
+the new `sdkconfig.defaults` (an existing `sdkconfig` keeps the old table:
+move it to `sdkconfig.old`, it is regenerated) and flash: the settings in NVS
+and everything else stay where they were.
+
 ## First power-up checklist
 
 1. Run `host/target_monitor.py --port /dev/ttyACM0`. Check that rows arrive and
@@ -430,6 +455,7 @@ Commands are case-sensitive: `S` is saturation, `s` is the stream.
 | `!reset` | Erase the saved settings and go back to the Kconfig defaults |
 | `!stage <0-3>` | Detector level: 0 HSV, 1 learned colour table, 2 + blob classifier, 3 + CNN. A level whose model is missing or invalid is accepted but **falls back** to the highest complete one; `#!CFG` (`stage_eff`) and every row (`stage`) say what really runs. Live only; `!save` keeps it. |
 | `!flip <0\|1>` | Turn the image 180° in the sensor (vertical flip and mirror together), on top of `TARGETCAM_VFLIP`/`HMIRROR`. For a board whose image arrives upside down. Live; `!save` keeps it. |
+| `!dump <kind>` / `!upload <kind> <len> <crc>` / `!unload <kind\|all>` | Model records over the link (phase D, see [Models over the link](#models-over-the-link-phase-d-dump-upload-unload)). |
 | `!thr3 <0-99>` | Stage 3's threshold, the CNN's, as `!thr2` is the classifier's. Live; `!save` keeps it. |
 | `!cnnk <1-4>` | How many of the blobs stage 2 kept the CNN checks, largest first. Each costs a crop (`!cnnbench`); the rest keep stage 2's verdict. Live; `!save` keeps it. |
 | `!cnnbench [16\|24]` | Time the CNN on the board (phase C0): `#!CNNBENCH n= macs= us_per_crop= cycles_per_mac=`. Stalls one loop by about 20 crops' time. |
@@ -468,7 +494,9 @@ also be `mismatch`, a classifier trained behind another colour table) `lut_id=`
 `clf_id=` (the classifier's train id, 0 without one) `thr2=` (`!thr2`, 0 = the
 model's) `clf_thr=` (the threshold stage 2 runs with, −1 with no classifier)
 `cnn_id=` `thr3=` `cnn_thr=` (the same three for the CNN; `cnn=` can also be
-`mismatch`).
+`mismatch`) `lut_src=` `clf_src=` `cnn_src=` (where each running model came
+from: `build`, `upload` or `none`) `upload=` (1 when the `tcmodels` partition
+exists).
 After `awb=` (0, 1 or 2) come `wb=` (`frozen`, `auto` or `fixed`) `wb_gain=`
 (the R,G,B gains in use, `0,0,0` when they are not known: in auto and frozen)
 and `wb_fixed=` (the gains `w2` would use, kept while in auto).
@@ -662,6 +690,8 @@ measured distances (see the checklist).
 | `main/models/cnn_model.{h,bin,json}` | The crop CNN, the same way (`host/train/train_cnn.py`); `cnn_model.h` alone, a placeholder, when none is installed. |
 | `main/models/clf_model.{h,bin,json}` | The blob classifier, the same way (`host/train/train_clf.py`). With none installed, `clf_model.h` alone, a placeholder. |
 | `main/target_main.c` | Camera setup, pacing, calibration, mask dump, bearing/range, CSV, commands. |
+| `main/model_store.h/.c` | Phase D: the `tcmodels` partition's slots for uploaded model records (map, erase, write, commit). |
+| `partitions.csv` | The partition table: ESP-IDF's single factory app plus `tcmodels` (64 kB) for uploaded models. |
 | `main/link.h/.c` | Binary packets (`#!FRAME`, `#!BLOB`; CRC-32, one sequence counter) and run-time baud changes with the 3 s safety revert. |
 | `main/settings.h/.c` | Versioned settings record in NVS (`!save` / `!load` / `!reset`). |
 | `main/camera_pins.h` | Pin maps: AI-Thinker, ESP-EYE, XIAO S3 (shared with optflow_cam). |

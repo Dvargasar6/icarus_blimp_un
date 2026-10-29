@@ -1,0 +1,10 @@
+# target_cam partition table: ESP-IDF's "single factory app" (nvs, phy_init,
+# a 1 MB app at 0x10000) plus "tcmodels", 64 kB for model records uploaded
+# with '!upload' (main/model_store.h). The first three are where they always
+# were, so a board flashed with this table keeps its saved settings (NVS at
+# 0x9000) and boots as before; tcmodels sits after the app, inside 2 MB.
+# Name,   Type, SubType, Offset,   Size, Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  1M,
+tcmodels, data, 0x40,    0x110000, 64K,

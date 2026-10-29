@@ -23,6 +23,7 @@ import tty
 import numpy as np
 
 from . import detector as D
+from . import protocol as P
 from .protocol import (BAUDS, BOOT_BAUD, COLUMNS, CSV_VERSION, FEAT_VERSION, encode_blob,
                        encode_frame, frame_seconds)
 
@@ -99,6 +100,14 @@ class FakeCamera:
         self.scene = Scene()
         self._stop = threading.Event()
         self._rx = bytearray()
+        # Phase D: uploaded model records (model_store.h), kind -> bytes, and
+        # an '!upload' in progress: (kind, len, crc) until its bytes are in.
+        self.uploaded: dict = {}
+        self._up = None
+        self._up_buf = bytearray()
+        self._dump = None
+        self._up_ready = False
+        self._pkt_seq = 0
         self._wlock = threading.Lock()
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -134,23 +143,53 @@ class FakeCamera:
 
     def _print_cfg(self):
         c = self.cfg
+        ms = {k: (v[0], v[1], v[2]) for k, v in self._models_state().items()}
         self._print("#!CFG w=%d h=%d cell=2 hue=%d tol=%d sat=%d val=%d area=%d mm=%d "
                     "fov=%.1f fps=%.3g period_ms=%.1f sensor_us=%.0f awb=%d wb=%s "
                     "wb_gain=%d,%d,%d wb_fixed=%d,%d,%d be=%d preset=%s baud=%d "
                     "image=%d stream=%d settings=%s stage=%d stage_eff=%d lut=%s lut_id=%d "
                     "clf=%s cnn=%s cnn_k=%d csv=%d fw=fake collect=%d fv=%d flip=%d "
-                    "clf_id=%d thr2=%d clf_thr=%.2f cnn_id=%d thr3=%d cnn_thr=%.2f\n"
+                    "clf_id=%d thr2=%d clf_thr=%.2f cnn_id=%d thr3=%d cnn_thr=%.2f "
+                    "lut_src=%s clf_src=%s cnn_src=%s upload=1\n"
                     % (W, H, c["hue"], c["tol"], c["sat"], c["val"], c["area"], c["mm"],
                        c["fov"], 1000.0 / self._period_ms(), self._period_ms(), SENSOR_US,
                        c["awb"], WB_NAMES[c["awb"]], *self._wb_gain(), *c["wb_fixed"],
                        c["be"], c["preset"], self.baud, int(self.image),
                        int(self.stream), self._settings_state(), c["stage"],
-                       self._stage_eff(), "ok" if D.models().lut else "none",
-                       D.models().lut_id, "ok" if D.models().clf else "none",
-                       "ok" if D.models().cnn else "none", c["cnn_k"],
+                       self._stage_eff(), ms["lut"][1], ms["lut"][2], ms["clf"][1],
+                       ms["cnn"][1], c["cnn_k"],
                        CSV_VERSION, int(self.collect), FEAT_VERSION, c["flip"],
-                       D.models().clf_id, c["thr2"], self._clf_thr(), D.models().cnn_id,
-                       c["thr3"], self._cnn_thr()))
+                       ms["clf"][2], c["thr2"], self._clf_thr(), ms["cnn"][2],
+                       c["thr3"], self._cnn_thr(), ms["lut"][0], ms["clf"][0], ms["cnn"][0]))
+
+    def _record(self, kind: str):
+        """(source, bytes) of the running model of a kind, as target_main.c
+        running_record(): the upload if any, else main/models, else none."""
+        if kind in self.uploaded:
+            return "upload", self.uploaded[kind]
+        p = D.MAIN_DIR / "models" / ("%s_model.bin" % kind)
+        return ("build", p.read_bytes()) if p.exists() else ("none", None)
+
+    def _models_state(self) -> dict:
+        """kind -> (src, state, id), with target_main.c's table binding."""
+        out, lut_id = {}, 0
+        for kind in ("lut", "clf", "cnn"):
+            src, rec = self._record(kind)
+            if rec is None:
+                out[kind] = ("none", "none", 0)
+                continue
+            try:
+                if kind == "lut":
+                    tid = D.lut_models(record=rec).lut_id
+                    lut_id = tid
+                    out[kind] = (src, "ok", tid)
+                    continue
+                m, tid = (D.load_clf if kind == "clf" else D.load_cnn)(rec)
+            except D.ModelError:
+                out[kind] = ("bad", "bad", 0)
+                continue
+            out[kind] = (src, "ok" if m.lut_id == lut_id and lut_id else "mismatch", tid)
+        return out
 
     def _cnn_thr(self) -> float:
         m = D.models()
@@ -233,6 +272,31 @@ class FakeCamera:
                 err = "usage: !thr2 <0-99> (hundredths; 0 = the model's own)"
             else:
                 self.cfg["thr2"] = int(a)
+        elif line.split(" ")[0] == "!dump":
+            a = line[6:].strip() if line[5:6] == " " else ""
+            if a not in ("lut", "clf", "cnn"):
+                err = "usage: !dump <lut|clf|cnn>"
+            else:
+                self._dump = a
+        elif line.split(" ")[0] == "!upload":
+            parts = line.split()
+            try:
+                kind, n, crc = parts[1], int(parts[2]), int(parts[3], 16)
+                ok = len(parts) == 4 and kind in ("lut", "clf", "cnn") and 20 <= n <= 16380
+            except (IndexError, ValueError):
+                ok = False
+            if not ok:
+                err = "usage: !upload <lut|clf|cnn> <len> <crc32 hex>"
+            else:
+                self._up = (kind, n, crc)
+        elif line.split(" ")[0] == "!unload":
+            a = line[8:].strip() if line[7:8] == " " else ""
+            if a not in ("lut", "clf", "cnn", "all"):
+                err = "usage: !unload <lut|clf|cnn|all>"
+            elif a == "all":
+                self.uploaded.clear()
+            else:
+                self.uploaded.pop(a, None)
         elif line.split(" ")[0] == "!cnnbench":
             a = line[10:].strip() if line[9:10] == " " else ""
             if a not in ("", "16", "24"):
@@ -345,11 +409,57 @@ class FakeCamera:
             return ("nak", err)
         return ("later" if later else "ok", None)
 
+    def _serve_transfer(self):
+        """target_main.c serve_model_transfer(), after the command's #!ACK."""
+        if self._dump is not None:
+            kind, self._dump = self._dump, None
+            src, rec = self._record(kind)
+            if rec is None:
+                self._print("#!MODEL none kind=%s src=%s\n" % (kind, src))
+            else:
+                self._pkt_seq += 1
+                self._write(P.encode_model(self._pkt_seq, kind, src, rec))
+        if self._up is not None and not self._up_ready:
+            self._up_ready = True
+            self._print("#!UPLOAD ready kind=%s len=%d\n" % (self._up[0], self._up[1]))
+
+    def _take_upload(self) -> bool:
+        """Bytes of an upload in progress come raw, before any command line.
+        True while the upload still wants bytes."""
+        if self._up is None or not self._up_ready:
+            return False
+        kind, n, crc = self._up
+        need = n - len(self._up_buf)
+        self._up_buf += self._rx[:need]
+        del self._rx[:need]
+        if len(self._up_buf) < n:
+            return True
+        data = bytes(self._up_buf)
+        self._up, self._up_buf, self._up_ready = None, bytearray(), False
+        if P.crc32(data) != crc:
+            self._print("#!UPLOAD refused kind=%s reason=crc\n" % kind)
+            return False
+        before = self.uploaded.get(kind)
+        self.uploaded[kind] = data
+        st = self._models_state()[kind]
+        if st[0] != "upload":
+            if before is None:
+                self.uploaded.pop(kind)
+            else:
+                self.uploaded[kind] = before
+            self._print("#!UPLOAD refused kind=%s reason=record\n" % kind)
+            return False
+        self._print("#!UPLOAD ok kind=%s id=%d state=%s\n" % (kind, st[2], st[1]))
+        self._print_cfg()
+        return False
+
     def _poll_commands(self):
         try:
             self._rx += os.read(self.master, 4096)
         except (BlockingIOError, OSError):
             pass
+        if self._take_upload():
+            return
         while True:
             idx = min((i for i in (self._rx.find(b"\n"), self._rx.find(b"\r")) if i >= 0),
                       default=-1)
@@ -367,6 +477,9 @@ class FakeCamera:
             self._print("#!ACK %s\n" % line)
             if kind == "ok":
                 self._print_cfg()
+                self._serve_transfer()
+                if self._take_upload():
+                    return
             elif kind == "baud":
                 self._print("#!BAUD %d\n" % arg)
                 self.baud = arg

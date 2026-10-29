@@ -570,7 +570,7 @@ queden abiertas se hacen al implementar cada funcionalidad.
 | **C0 — Medir antes de la CNN** | Microbenchmark de conv 3×3 int8 en el board | Ciclos/MAC medidos; decisión 16 vs 24 y `cnn_k` |
 | **P7 — Etapa 3, núcleo** ✓ | `train_cnn.py` (numpy), `blob_cnn.{c,h}` (registro `TCCN`, guarda `lut_id`), etapa 3 en `tc_pipeline`, equivalencia bit a bit C ↔ referencia entera en numpy | `make test`, pytest |
 | **P8 — Etapa 3 en la GUI y en el board** ✓ GUI (falta el board, §13) | Train/Verify/Firmware para la etapa 3; corrida larga | 0 filas `dt≠80`; temperatura ≥ 10 min; mejora medida sobre la etapa 2 |
-| **D — `!dump` y carga a NVS** | Leer y escribir registros de modelo por serie, con CRC | Modelo leído = modelo instalado |
+| **D — `!dump` y carga por serie** ✓ (partición `tcmodels`, no NVS; falta el board, §13) | Leer y escribir registros de modelo por serie, con CRC | Modelo leído = modelo instalado |
 | **R — Rango** | Corrección con 3–4 distancias medidas; calibración de FOV | Error de rango antes/después |
 
 En paralelo, del lado de los datos: etiquetar `train/s2/*`, `test/red_s2`,
@@ -684,6 +684,7 @@ hay que anotar va en **negrita**; con eso se completan el report (§11.5,
 
 | # | Qué | Cómo | Resultado esperado / qué anotar |
 |---|---|---|---|
+| 0 | Tabla de particiones nueva (D) | Antes de compilar: mover `firmware/projects/target_cam/sdkconfig` a `sdkconfig.old` si existe (se regenera con la partición `tcmodels`) | Tras el paso 1, `#!CFG` dice `upload=1` |
 | 1 | Firmware actual (P5) | Firmware → *Build* → *Flash…* (BOOT, reconectar, *BOOT held — flash now*, soltar, reconectar, *Reconnect and check*) | Banner "the installed table"; `#!CFG` con `thr2=`, `thr3=`, `cnn_id=` (firmware con P6–P7). **Que el asistente funcione en cada paso** |
 | 2 | Ajustes v7 | Consola: `?`, luego `!save`, desconectar y reconectar el USB | El banner de arranque dice `settings loaded from flash` (un registro v5/v6 previo se lee sin perder la calibración) |
 | 3 | Costo de la CNN (C0) | Image & calibration → etapa 3 → *Measure the CNN on the camera*; repetir con `!cnnbench 24` en la consola | **µs por recorte y ciclos por multiplicación-acumulación, a 16 y a 24**. Decide 16 vs 24 y `cnn_k` |
@@ -693,6 +694,7 @@ hay que anotar va en **negrita**; con eso se completan el report (§11.5,
 | 7 | Etapa 3 (C3) | Train → etapa 3 sobre `tabla_1_s3` (o el juego que se elija) → Firmware → instalar, compilar, flashear → `!stage 3` | Banner "table, classifier and CNN are the installed ones" |
 | 8 | Tiempo de la etapa 3 | Flight data → *Reset counts*; **10 minutos** con escena | **`dt≠80` (0), `t_c_us` p50/máx, `loop_us` máx**; **temperatura de la placa al inicio y al final** (termómetro o tacto: anotar si quema) |
 | 9 | `!cnnk` | `!cnnk 1`, `!cnnk 4`, mirar `t_c_us` | `t_c_us` crece con el número de blobs revisados |
+| 9b | Modelos por serie (D) | Firmware → *Back up the camera's models*; luego elegir un juego → *Upload the chosen set*; reiniciar la cámara; *Back to the build's models* | Se crea `models/camera_<id>_<fecha>/`; tras subir, `#!CFG` con `clf_src=upload` y el id del juego, también después del reinicio; al descargar, `*_src=build`. **Tiempo de la subida de la tabla (8 kB)** |
 | 10 | Captura con ganancias iguales | Un solo `Wc` + `!save`; capturar y etiquetar sesiones nuevas (con globos naranja/rosado y vacíos) en ≥ 2 lugares o momentos | Datos para reentrenar 1–3 y que la verificación pueda concluir (§11.4) |
 
 Si algo falla, el log de la pestaña Firmware y la consola tienen *Copy*; con

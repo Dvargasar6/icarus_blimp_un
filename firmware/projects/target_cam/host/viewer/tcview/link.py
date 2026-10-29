@@ -115,6 +115,7 @@ class SerialLink(QThread):
         self.counters = Counters()
         self.image_on = False               # from #!CFG; frames make the camera slow to answer
         self._q: "queue.Queue[_Cmd]" = queue.Queue()
+        self._raw: "queue.Queue[bytes]" = queue.Queue()     # '!upload' payloads
         self._stop = threading.Event()
         self._ser: Optional[serial.Serial] = None
         self._cur: Optional[_Cmd] = None
@@ -137,6 +138,12 @@ class SerialLink(QThread):
             except ValueError:
                 pass
         self._q.put(_Cmd(cmd, baud))
+
+    def send_raw(self, data: bytes):
+        """Bytes written as they are, no line ending: a model record after the
+        camera's '#!UPLOAD ready'. Only then: the camera reads them raw, and
+        anything else on the line would be taken as part of the record."""
+        self._raw.put(bytes(data))
 
     def pending(self) -> int:
         return self._q.qsize() + (1 if self._cur else 0)
@@ -191,6 +198,7 @@ class SerialLink(QThread):
         try:
             while not self._stop.is_set() and not self._closed_down():
                 self._read()
+                self._send_raw()
                 self._commands()
                 self._watchdog()
         except (serial.SerialException, OSError) as e:
@@ -268,6 +276,14 @@ class SerialLink(QThread):
         self.baud = baud
         self._last_valid = time.monotonic()
         self.baud_changed.emit(baud)
+
+    def _send_raw(self):
+        try:
+            data = self._raw.get_nowait()
+        except queue.Empty:
+            return
+        self._ser.write(data)
+        self._ser.flush()
 
     def _write(self, text: str):
         self._ser.write(("\n" + text + "\n").encode("ascii", "replace"))

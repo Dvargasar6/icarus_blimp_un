@@ -301,6 +301,20 @@ part of the viewer that writes `main/models/`.
   installed back. A set without a classifier puts the "no classifier"
   placeholder back. The camera's own record checks run first: a set the
   firmware would refuse is not installed.
+- **Camera models (no flashing)** (phase D firmware): *Back up the camera's
+  models* reads back what the camera runs (`!dump`) and keeps it as
+  `models/camera_<lut_id>_<date>/`, unless a set already holds those bytes.
+  *Upload the chosen set* backs up first, then sends the set's records with
+  `!upload` (table, classifier, CNN; and `!unload`s uploaded kinds the set
+  lacks), and checks `#!CFG`: the set runs at once, no rebuild, no BOOT
+  button, and stays across power cycles and reflashes. *Back to the build's
+  models* sends `!unload all`. **Install** also backs the camera's models up
+  first when one is connected, and **Flash…** unloads uploaded models first,
+  since they would otherwise shadow the build's.
+- **2 · Build** warns when `sdkconfig` predates `sdkconfig.defaults` (idf.py
+  applies the defaults only when it creates `sdkconfig`, so an old one keeps
+  the partition table without `tcmodels`); *Regenerate sdkconfig* moves it to
+  `sdkconfig.old` and the next build makes it again.
 - **2 · Build**: `idf.py build` through the ESP-IDF activation script, found
   as `~/.espressif/tools/activate_idf_v*.sh` (or give its path).
 - **3 · Flash and check** walks through the ESP32-CAM-MB's BOOT button:
