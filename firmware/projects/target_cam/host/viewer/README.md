@@ -231,7 +231,7 @@ Image & calibration. Stage 3 (the crop CNN) is phase P7 and greyed out.
   *Verify this set →* opens it in the Verify tab, against its table alone.
 
 The firmware's set (`main/models/`) is never written here; installing a set is
-the Firmware tab's job (phase P5).
+the Firmware tab's job.
 
 ## Verify screen
 
@@ -259,6 +259,31 @@ Scores one model, or compares two, on labelled test folders, with the numbers
   (yellow), the labelled balloons (dotted cyan), and the reported blobs, green
   in a balloon and red outside one, numbered as the camera reports them, with
   the classifier's confidence from stage 2.
+
+## Firmware screen
+
+Puts a model set on the camera and checks that it is there. It is the only
+part of the viewer that writes `main/models/`.
+
+- **Installed now**: what `main/models/` holds (table and classifier ids, and
+  the `models/` set with the same bytes, if any), whether the last build
+  (`build/target_cam.bin`) contains those records, and what the connected
+  camera's `#!CFG` reports against them.
+- **1 · Install a model set**: choose a set from `models/` and *Install*. The
+  current `main/models/` is first moved into `models/firmware_<lut_id>_<date>`
+  (skipped when a set there already holds the same bytes), so it can be
+  installed back. A set without a classifier puts the "no classifier"
+  placeholder back. The camera's own record checks run first: a set the
+  firmware would refuse is not installed.
+- **2 · Build**: `idf.py build` through the ESP-IDF activation script, found
+  as `~/.espressif/tools/activate_idf_v*.sh` (or give its path).
+- **3 · Flash and check** walks through the ESP32-CAM-MB's BOOT button:
+  the viewer lets go of the port; you hold BOOT, replug the USB and keep
+  holding, then click *BOOT held — flash now* (esptool at 115200, no
+  resets); then release BOOT, replug, and click *Reconnect and check*. The
+  viewer reconnects and compares the camera's `lut_id`, `clf` and `clf_id`
+  with what was installed. To use a classifier afterwards: `!stage 2`, then
+  `!save`.
 
 ## Protocol (firmware ↔ viewer)
 

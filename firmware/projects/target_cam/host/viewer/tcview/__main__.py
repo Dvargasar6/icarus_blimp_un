@@ -31,6 +31,7 @@ from .flight_tab import FlightTab
 from .label_tab import LabelTab
 from .train_tab import TrainTab
 from .verify_tab import VerifyTab
+from .firmware_tab import FirmwareTab
 from .link import CLOSE_S, LOST, OPEN_FAILED, REVERT_S, SerialLink, open_error
 from .ui import persist, theme
 from .ui.keys import add_shortcut
@@ -59,6 +60,8 @@ class MainWindow(QMainWindow):
         self.blobs = BlobsTab(self)
         self.train = TrainTab(self)
         self.verify = VerifyTab(self)
+        self.firmware = FirmwareTab(self)
+        self.train.sets_changed.connect(self.firmware.reload_sets)
         self.train.sets_changed.connect(self.verify.reload_sets)
         self.train.verify_requested.connect(self._verify_set)
         self.tabs.add_page(self.calib, "Image && calibration")
@@ -67,6 +70,7 @@ class MainWindow(QMainWindow):
         self.tabs.add_page(self.blobs, "Blobs", "classifier data")
         self.tabs.add_page(self.train, "Train", "train stage 1-3 models into models/")
         self.tabs.add_page(self.verify, "Verify", "score or compare models on test folders")
+        self.tabs.add_page(self.firmware, "Firmware", "install a model set, build, flash, check")
         self.tabs.currentChanged.connect(self._tab_changed)
         central = QWidget()
         cl = QVBoxLayout(central)
@@ -138,7 +142,7 @@ class MainWindow(QMainWindow):
     def _tab_groups(self):
         return (("calib", self.calib), ("flight", self.flight), ("label", self.label),
                 ("blobs", self.blobs), ("train", self.train),
-                ("verify", self.verify))
+                ("verify", self.verify), ("firmware", self.firmware))
 
     def restore_layout(self):
         """Everything but the window's size and place: main() sets those,
@@ -238,7 +242,7 @@ class MainWindow(QMainWindow):
                 self._say("# [viewer] " + detail, "err")
         self._set_conn("off", keep_pill=True)
         self.bar.port_combo.refresh()
-        for tab in (self.calib, self.flight, self.blobs):
+        for tab in (self.calib, self.flight, self.blobs, self.firmware):
             tab.on_disconnected()
         self._tick1()
 
@@ -314,6 +318,7 @@ class MainWindow(QMainWindow):
             self.calib.on_cfg(ev.v)
             self.flight.on_cfg(ev.v)
             self.blobs.on_cfg(ev.v)
+            self.firmware.on_cfg(ev.v)
         elif isinstance(ev, P.Cal):
             self.calib.on_cal(ev)
         elif isinstance(ev, P.WbCal):
@@ -350,6 +355,8 @@ class MainWindow(QMainWindow):
             self.flight.entered()
         elif page is self.label:
             self.label.entered()
+        elif page is self.firmware:
+            self.firmware.reload_sets()         # the port, the build and main/models may have changed
         self._show_offline_note()
 
     def _tick1(self):

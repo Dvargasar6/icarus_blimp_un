@@ -549,7 +549,7 @@ queden abiertas se hacen al implementar cada funcionalidad.
 | **P2 — Biblioteca de modelos y motor** ✓ | `models/` (juegos, metadatos, migración de `tables/`), motor de evaluación compartido por Verify y Train, ejecución de entrenadores en segundo plano | Tests del motor |
 | **P3 — Pestaña Train** ✓ | Etapas 1 y 2 (la 3 se activa en P8) | Tests offscreen; un entrenamiento real con `data/train` |
 | **P4 — Pestaña Verify** ✓ | Uno y dos modelos, por cuadro, veredicto | Tests; resultados iguales a `eval_frames.py` |
-| **P5 — Pestaña Firmware** | Respaldo, instalación, compilación, flasheo guiado, comprobación de ids | Tests con un compilador simulado; **en el board**: instalar tabla + clasificador, `!stage 2` |
+| **P5 — Pestaña Firmware** ✓ (falta la prueba en el board) | Respaldo, instalación, compilación, flasheo guiado, comprobación de ids | Tests con un compilador simulado; **en el board**: instalar tabla + clasificador, `!stage 2` |
 | **B3 — Etapa 2 en el board** | `csv_report.py` a `!stage 2`, escena con globo + madera + globo naranja | 0 filas `dt≠80`; `t_b_us`; desaparecen los falsos; el globo se conserva |
 | **P6 — Cambios en tcview** | Calibración por etapa (+ comandos de umbral en el firmware, NVS v6), zoom con lupas, relleno de interior | Tests; capturas a 1280×720 |
 | **C0 — Medir antes de la CNN** | Microbenchmark de conv 3×3 int8 en el board | Ciclos/MAC medidos; decisión 16 vs 24 y `cnn_k` |
