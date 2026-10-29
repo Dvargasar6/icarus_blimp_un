@@ -1,0 +1,37 @@
+frame                                bal  TP  FN  FP split  blob 1   px P%  px R%
+bal_multi_155cm                        1   1   0   1     0  balloon   71.6   46.3
+bal_multi_164cm                        1   1   0   0     0  balloon   86.9   41.7
+bal_multi_175cm                        1   1   0   3     0  false     14.5   77.8
+bal_multi_200cm                        1   1   0   0     0  balloon   88.0   13.7
+bal_multi_210cm                        1   1   0   1     0  balloon   50.8   60.2
+bal_multi_280cm                        1   1   0   1     0  false     39.4   53.8
+bal_multi_500cm                        1   1   0   0     0  balloon   65.1   63.6
+bal_nonred_1                           0   0   0   2     0  false      0.0    -  
+bal_nonred_2                           0   0   0   3     0  false      0.0    -  
+bal_nonred_3                           0   0   0   1     0  false      0.0    -  
+bal_red_130cm                          1   1   0   0     0  balloon   67.2   53.3
+bal_red_147cm                          1   1   0   0     0  balloon  100.0   23.9
+bal_red_150cm                          1   1   0   0     0  balloon  100.0   34.4
+bal_red_160cm                          1   1   0   0     0  balloon   94.2   52.9
+bal_red_175cm                          1   1   0   0     0  balloon   99.5   34.8
+bal_red_197cm                          1   1   0   0     0  balloon  100.0   39.8
+bal_red_200cm                          1   1   0   0     0  balloon   73.1   53.9
+bal_red_220cm                          1   1   0   0     0  balloon   93.9   25.3
+bal_red_320cm                          1   1   0   0     0  balloon   84.4   52.9
+bal_red_380cm                          1   1   0   0     0  balloon   60.8   40.5
+bal_red_740cm                          1   0   1   0     0  none      27.3   34.3
+bal_red_clutter-only_1                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_2                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_3                 0   0   0   1     0  false      0.0    -  
+bal_red_clutter-only_4                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_5                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_6                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_7                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_8                 0   0   0   0     0  none       0.0    -  
+
+frames        29 labelled (18 with a balloon, 11 without); 0 saved frames not labelled
+stage         requested 1, ran 1; settings from each frame's own .json
+blobs         TP 17  FN 1  FP 13  split 0   precision  56.7 %  recall  94.4 %
+blob 1        a balloon in 15 of 18 frames with one; a false blob 1 in 4 of 11 frames without
+colour table  id 1792216162, /home/daniel68/Downloads/icarus_blimp_un/firmware/projects/target_cam/main/models/lut_model.bin
+pixels        precision  36.1 %  recall  45.0 %   (colour table; on labelled pixels only)

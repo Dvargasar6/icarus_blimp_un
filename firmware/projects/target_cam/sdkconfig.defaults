@@ -1,0 +1,30 @@
+# ESP32-CAM forward colour target: thermal and timing defaults.
+#
+# Inherits optflow_cam's measured choices. Each one is a heat or timing
+# decision; see that project's sdkconfig.defaults for the measurements.
+# This firmware never starts a radio, so what is left is CPU and sensor clock.
+
+# 240 MHz. Detection costs far less than optflow's block matcher, but the
+# RGB565 frame is twice the bytes and the clock leaves margin for the blocking
+# printf of each CSV row.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
+# 1 kHz tick, so millisecond frame pacing does not quantise to 10 ms.
+CONFIG_FREERTOS_HZ=1000
+
+# PSRAM is enabled for compatibility only. Both RGB565 frame buffers (2 x 38 kB)
+# and the 28 kB detector workspace live in internal DRAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_40M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# Console on UART0. The CSV stream is the product of this firmware.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# A brownout on this board is the supply, not the code. Keep it a clean,
+# logged reset rather than silent corruption.
+CONFIG_ESP_BROWNOUT_DET=y

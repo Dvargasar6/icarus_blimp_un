@@ -1,0 +1,31 @@
+frame                                bal  TP  FN  FP split  blob 1   px P%  px R%
+bal_multi_162cm                        1   1   0   0     0  balloon   51.5   46.5
+bal_multi_200cm                        1   1   0   3     0  false     16.2   39.9
+bal_multi_220cm                        1   0   1   4     0  false     23.6   72.3
+bal_multi_400cm                        1   0   1   0     0  none      14.7   17.9
+bal_multi_550cm                        1   0   1   0     0  none      11.6   33.3
+bal_nonred_1                           0   0   0   1     0  false      0.0    -  
+bal_nonred_2                           1   0   1   1     0  false      0.5    2.0
+bal_red_100cm                          1   1   0   0     0  balloon   87.7   45.6
+bal_red_112cm                          1   1   0   3     0  balloon   31.2   40.1
+bal_red_115cm                          1   1   0   0     0  balloon   47.1    6.2
+bal_red_174cm                          1   1   0   0     0  balloon   85.4   44.8
+bal_red_240cm                          1   1   0   1     0  false     16.1   45.4
+bal_red_260cm                          1   1   0   0     0  balloon   44.7   38.1
+bal_red_540cm                          1   0   1   0     0  none      10.5    5.8
+bal_red_clutter-only_1                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_2                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_3                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_4                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_5                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_6                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_7                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_8                 0   0   0   0     0  none       0.0    -  
+bal_red_clutter-only_9                 0   0   0   3     0  false      0.0    -  
+
+frames        23 labelled (13 with a balloon, 10 without); 0 saved frames not labelled
+stage         requested 1, ran 1; settings from each frame's own .json
+blobs         TP 8  FN 5  FP 16  split 0   precision  33.3 %  recall  61.5 %
+blob 1        a balloon in 6 of 13 frames with one; a false blob 1 in 2 of 10 frames without
+colour table  id 1792630526, data/lut_try_s6/lut_model.bin
+pixels        precision  22.9 %  recall  37.6 %   (colour table; on labelled pixels only)

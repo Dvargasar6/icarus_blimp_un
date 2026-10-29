@@ -1,0 +1,22 @@
+colour table tables/firmware_id1792216162/lut_model.bin, id 1792216162
+blobs_2                  105 frames  254 blobs:  48 balloon, 206 not   (blob set)
+DATA WARNING: blob sets hold only the balloons the table found: their FN counts balloons the classifier drops, not ones the table missed
+
+final classifier: l2 1  threshold 0.50, behind table 1792216162, trained on blobs_2: 254 blobs (48 balloon), id 1793156579
+  weights (on standardised features, largest first):
+    sat_mean     +1.671
+    log_aspect   +0.931
+    val_mean     +0.722
+    sat_std      +0.658
+    log_area     +0.602
+    hue_spread   +0.386
+    ring         +0.348
+    cy_norm      -0.219
+    edge         -0.100
+    texture      -0.071
+    fill         -0.046
+    highlight    -0.041
+  bias -1.073
+  on blobs_2                (training data, optimistic) cost 43 = false b1 30/66 + wrong b1 6 + FN 7   FP 46  dropped 167 (7 balloons)
+wrote tables/firmware_id1792216162/clf_model.{bin,h,json}
+next: eval_frames.py --stage 2 --lut tables/firmware_id1792216162/lut_model.bin --clf tables/firmware_id1792216162/clf_model.bin DIR...

@@ -1,0 +1,7 @@
+# target_cam PC viewer. Install into the dedicated conda env (see README.md):
+# PYTHONNOUSERSITE=1 must be set in the env BEFORE this is installed.
+pyserial==3.5
+numpy==1.26.4
+PyQt6==6.11.0
+pyqtgraph==0.14.0
+pytest

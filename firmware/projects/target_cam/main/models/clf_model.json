@@ -1,0 +1,96 @@
+{
+ "train_id": 1793156577,
+ "lut_id": 1793156551,
+ "lut": "tables/tabla_1_s3/lut_model.bin",
+ "l2": 1.0,
+ "threshold": 0.5,
+ "feat_version": 1,
+ "features": [
+  "fill",
+  "log_aspect",
+  "hue_spread",
+  "sat_mean",
+  "sat_std",
+  "val_mean",
+  "highlight",
+  "edge",
+  "texture",
+  "ring",
+  "cy_norm",
+  "log_area"
+ ],
+ "weights": {
+  "fill": 1.2894987233691388,
+  "log_aspect": -0.30320406924995935,
+  "hue_spread": 0.8867196663311704,
+  "sat_mean": 1.0480572216969297,
+  "sat_std": 0.6418725356329295,
+  "val_mean": -0.48842607853409553,
+  "highlight": 0.08589859732296164,
+  "edge": -0.6714998156478422,
+  "texture": 0.6075828530402759,
+  "ring": -0.36649583291048493,
+  "cy_norm": -0.9783295077647001,
+  "log_area": 1.3184151749164386
+ },
+ "bias": -1.3152748183613834,
+ "mean": [
+  0.48260022051194135,
+  0.12748971616520602,
+  8.196257153679342,
+  188.75162730497473,
+  23.403473562352797,
+  111.28255004882813,
+  0.0175607670988778,
+  35.090425906461824,
+  22.421763739866368,
+  0.038033490540350184,
+  0.6116530175211237,
+  5.315809162925271
+ ],
+ "scale": [
+  6.594000262410014,
+  1.8563504982234573,
+  0.6068810056538129,
+  0.047365324702749616,
+  0.12714655430162383,
+  0.029392595886649976,
+  23.87529088779033,
+  0.042327091174921984,
+  0.055869401568554,
+  17.285361768906668,
+  4.624492795337051,
+  0.7943023745626848
+ ],
+ "sessions": [
+  "classifier_red",
+  "classifier_orange",
+  "classifier_pink",
+  "classifier_env"
+ ],
+ "session_paths": [
+  "data/train/s3/classifier_red",
+  "data/train/s3/classifier_orange",
+  "data/train/s3/classifier_pink",
+  "data/train/s3/classifier_env"
+ ],
+ "blobs": {
+  "n": 85,
+  "balloon": 19,
+  "not_balloon": 66
+ },
+ "objective": "leave-one-session-out frame cost: false blob 1 + wrong blob 1 + FN",
+ "caveat": "parameters chosen on the same folds they are scored on",
+ "stage1_held_out": null,
+ "warnings": [],
+ "data_warnings": [],
+ "session_kinds": {
+  "classifier_red": "frames",
+  "classifier_orange": "frames",
+  "classifier_pink": "frames",
+  "classifier_env": "frames"
+ },
+ "search": [],
+ "record_bytes": 180,
+ "crc32": "9ea5dd6f"
+}

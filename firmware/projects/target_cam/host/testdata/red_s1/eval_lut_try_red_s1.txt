@@ -1,0 +1,15 @@
+frame                                bal  TP  FN  FP split  blob 1   px P%  px R%
+bal_red_110cm_black_shelve             1   1   0   0     0  balloon   99.6   48.0
+bal_red_130cm_wood                     1   1   0   0     0  balloon   97.8   51.6
+bal_red_170cm_wall_shelve              1   1   0   0     0  balloon   91.1   73.9
+bal_red_270cm_door                     1   1   0   0     0  balloon   81.3   45.1
+bal_red_290cm_doors                    1   1   0   0     0  balloon   76.2   17.8
+bal_red_90cm_wood_door                 1   1   0   0     1  balloon   95.2   59.2
+bal_red_90cm_wood_door_2               1   1   0   0     1  balloon   94.2   64.4
+
+frames        7 labelled (7 with a balloon, 0 without); 0 saved frames not labelled
+stage         requested 1, ran 1; settings from each frame's own .json
+blobs         TP 7  FN 0  FP 0  split 2   precision 100.0 %  recall 100.0 %
+blob 1        a balloon in 7 of 7 frames with one; a false blob 1 in 0 of 0 frames without
+colour table  id 1792631160, data/lut_try/lut_model.bin
+pixels        precision  94.6 %  recall  56.3 %   (colour table; on labelled pixels only)
