@@ -315,3 +315,39 @@ def test_fake_camera_takes_thr3_and_cnnk():
     assert cam._command("!cnnk 5")[0] == "nak"
     cam._print_cfg()
     assert " thr3=30 " in out[-1] and " cnn_k=3 " in out[-1] and "cnn_thr=" in out[-1]
+
+
+def test_cnn_bench_reading(app, win, monkeypatch):
+    """!cnnbench's line, held against the period with cnn_k crops per frame."""
+    cal = win.calib
+    sent = []
+    monkeypatch.setattr(win, "send", lambda c: sent.append(c) or True)
+    cal.on_cfg(cfg(stage=2, stage_eff=2, clf="ok", cnn="none", cnn_k=2, period_ms=80.0))
+    cal.stage_combo.setCurrentIndex(3)
+    assert cal.bench_btn.isEnabled()
+    cal.bench_btn.click()
+    assert sent[-1] == "!cnnbench"
+    ev = P.parse_line("#!CNNBENCH n=16 channels=8,16,16 macs=165904 us_per_crop=4100 "
+                      "cycles_per_mac=5.93 model=dummy")
+    assert isinstance(ev, P.CnnBench) and ev.v["macs"] == 165904
+    cal._loop_us = 14000.0
+    cal.on_cnnbench(ev)
+    t = cal.bench_lbl.text()
+    assert "4.1 ms per crop" in t and "8.2 ms per frame" in t and "22.2 of the 80 ms" in t
+    assert cal.bench_lbl.tone() == "ok"
+    cal.p["cnnk"].set_local(4)
+    cal.on_cnnbench(P.CnnBench(dict(ev.v, us_per_crop=12000)))
+    assert cal.bench_lbl.tone() == "warn"                   # 4 x 12 + 14 = 62 ms: over half
+    cal.on_cnnbench(P.CnnBench(dict(ev.v, us_per_crop=15000)))
+    assert cal.bench_lbl.tone() == "err"                    # 74 ms: over 80 % of the period
+
+
+def test_fake_camera_answers_cnnbench():
+    from tcview.fake_cam import FakeCamera
+    cam = FakeCamera()
+    out = []
+    cam._print = out.append
+    assert cam._command("!cnnbench 24")[0] == "ok"
+    ev = P.parse_line(out[-1].strip())
+    assert isinstance(ev, P.CnnBench) and ev.v["n"] == 24 and ev.v["macs"] > 300000
+    assert cam._command("!cnnbench 20")[0] == "nak"

@@ -323,6 +323,9 @@ class MainWindow(QMainWindow):
             self.calib.on_cal(ev)
         elif isinstance(ev, P.WbCal):
             self.calib.on_wbcal(ev)
+        elif isinstance(ev, P.CnnBench):
+            self._say("#!CNNBENCH " + " ".join("%s=%s" % kv for kv in ev.v.items()))
+            self.calib.on_cnnbench(ev)
         elif isinstance(ev, P.Comment):
             self._say(ev.text)
         elif isinstance(ev, P.Nak):

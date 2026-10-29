@@ -504,6 +504,18 @@ class CalibTab(QWidget):
                                   "largest first; each costs a crop's multiply-adds "
                                   "(!cnnbench measures it). The others keep stage 2's verdict.")
         np_.addWidget(self.p["cnnk"])
+        # Phase C0: the CNN's cost measured on the camera, held against the
+        # 80 ms period with the blobs checked per frame.
+        self.bench_btn = QPushButton("Measure the CNN on the camera")
+        self.bench_btn.setToolTip("!cnnbench: the camera runs the CNN on a synthetic crop 20 "
+                                  "times and reports the time per crop (one late row). "
+                                  "Without a CNN built in it times a network of the default "
+                                  "shape, which costs the same.")
+        self.bench_btn.clicked.connect(lambda: self.main.send("!cnnbench"))
+        np_.addLayout(_row(self.bench_btn))
+        self.bench_lbl = Banner("neutral", "")
+        self.bench_lbl.hide()
+        np_.addWidget(self.bench_lbl)
         mp.addWidget(self.cnn_info)
         s.add_widget(self.model_panel)
         return s
@@ -556,6 +568,8 @@ class CalibTab(QWidget):
         on3 = bool(pc.cnn) or v.get("cnn") == "ok"
         self.p["thr3"].setEnabled(on3)
         self.p["cnnk"].setEnabled(on3)
+        self.bench_btn.setEnabled(bool(v))
+        self._show_bench()
         self._refresh_summaries()
 
     def _build_blobs(self) -> CollapsibleSection:
@@ -736,7 +750,38 @@ class CalibTab(QWidget):
         self._redraw()
         self._update_region()
 
+    def on_cnnbench(self, ev: P.CnnBench):
+        """The cost of stage 3, from the camera's own measurement."""
+        self.bench = dict(ev.v)
+        self._show_bench()
+
+    def _show_bench(self):
+        v = getattr(self, "bench", None)
+        if not v:
+            self.bench_lbl.hide()
+            return
+        per_ms = float(v.get("us_per_crop", 0)) / 1000.0
+        k = self.p["cnnk"].local
+        period = float(self.cfg.get("period_ms", 80.0) or 80.0)
+        running3 = int(self.cfg.get("stage_eff", 0) or 0) >= 3
+        loop_ms = getattr(self, "_loop_us", None)
+        total = k * per_ms + ((loop_ms or 0) / 1000.0 if not running3 else 0.0)
+        text = ("%s×%s CNN (%s): %.1f ms per crop, %.2f cycles per multiply-add (%s "
+                "multiply-adds). Checking %d blob(s): %.1f ms per frame" % (
+                    v.get("n", "?"), v.get("n", "?"), v.get("model", "?"), per_ms,
+                    float(v.get("cycles_per_mac", 0)), v.get("macs", "?"), k, k * per_ms))
+        if loop_ms is not None:
+            text += ("; with the loop's %.1f ms that is %.1f of the %.0f ms period" % (
+                loop_ms / 1000.0, total, period)) if not running3 else \
+                ("; the loop (%.1f ms) already includes it" % (loop_ms / 1000.0))
+        text += ". Timing while frames are sent is not flight timing: confirm on Flight data."
+        self.bench_lbl.set("ok" if total < 0.5 * period else
+                           "warn" if total < 0.8 * period else "err", text)
+        self.bench_lbl.show()
+
     def on_row(self, row: P.Row):
+        if "loop_us" in row.v:
+            self._loop_us = float(row.v["loop_us"])
         if self.frame is not None and self.frame_row is None and \
                 int(row.v["t_ms"]) == self.frame.t_ms:
             self.frame_row = row.v

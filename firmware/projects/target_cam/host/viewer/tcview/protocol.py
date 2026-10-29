@@ -14,6 +14,7 @@ What comes out of the camera on UART0 is one byte stream that mixes:
     #!BAUD <n>                 the camera is switching to n baud now
     #!CAL ok|refused hue= ...  the result of 'c' (calibrate on centre)
     #!WBCAL ok|refused|cancelled ...  the result of 'Wc' (white card)
+    #!CNNBENCH n= macs= us_per_crop= cycles_per_mac= ...  '!cnnbench' (phase C0)
     #!WB mode= ctrl1= ...      'W': the sensor's white-balance registers
     #!END seq=<n>              closes a binary packet
 
@@ -128,6 +129,13 @@ class WbCal:
     """#!WBCAL: how 'Wc' ended. status is ok, refused or cancelled (a 'w' or
     'W' arrived while it ran); v holds the gains (ok) or reason= (refused)."""
     status: str
+    v: dict
+
+
+@dataclass
+class CnnBench:
+    """#!CNNBENCH: the CNN's measured cost on the camera ('!cnnbench'):
+    n, channels, macs, us_per_crop, cycles_per_mac, model (built-in|dummy)."""
     v: dict
 
 
@@ -323,6 +331,8 @@ def parse_line(line: str):
         if tag == "WBCAL":
             status, _, kv = rest.partition(" ")
             return WbCal(status, parse_kv(kv))
+        if tag == "CNNBENCH":
+            return CnnBench(parse_kv(rest))
         if tag == "END":
             seq = parse_kv(rest).get("seq")
             return End(seq if isinstance(seq, int) else -1)

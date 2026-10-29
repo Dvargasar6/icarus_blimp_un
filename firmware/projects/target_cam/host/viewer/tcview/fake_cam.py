@@ -233,6 +233,17 @@ class FakeCamera:
                 err = "usage: !thr2 <0-99> (hundredths; 0 = the model's own)"
             else:
                 self.cfg["thr2"] = int(a)
+        elif line.split(" ")[0] == "!cnnbench":
+            a = line[10:].strip() if line[9:10] == " " else ""
+            if a not in ("", "16", "24"):
+                err = "usage: !cnnbench [16|24]"
+            else:
+                # target_main.c's line; the time is the fake's assumption of
+                # 6 cycles per multiply-add at 240 MHz, not a measurement.
+                n = int(a or 16)
+                macs = n * n * 8 * 27 + (n // 2) ** 2 * 16 * 8 * 9 + (n // 4) ** 2 * 16 * 16 * 9 + 16
+                self._print("#!CNNBENCH n=%d channels=8,16,16 macs=%d us_per_crop=%.0f "
+                            "cycles_per_mac=6.00 model=dummy\n" % (n, macs, macs * 6 / 240.0))
         elif line.split(" ")[0] in ("!thr3", "!cnnk"):
             word = line.split(" ")[0]
             a = line[6:] if line[5:6] == " " else ""

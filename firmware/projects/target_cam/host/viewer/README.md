@@ -110,7 +110,7 @@ the stage in *Detector stage* (it follows the camera's, and *Set* sends
 | 0 | The HSV window: preset, hue bar, hue, tolerance, min sat, min value, `c`, and the Region section |
 | 1 | The colour table: its id on the PC and on the camera (the HSV settings are kept for stage 0, hidden) |
 | 2 | Also the blob classifier (PC and camera ids, the threshold it runs with) and its **Threshold** control, `!thr2` in hundredths, 0 = the model's own. The PC boxes run at the threshold the control shows |
-| 3 | Also the crop CNN (PC and camera ids, its running threshold), its **Threshold** (`!thr3`) and **Blobs checked** (`!cnnk`) |
+| 3 | Also the crop CNN (PC and camera ids, its running threshold), its **Threshold** (`!thr3`) and **Blobs checked** (`!cnnk`), and *Measure the CNN on the camera* (`!cnnbench`: time per crop, cycles per multiply-add, and the share of the frame period with that many blobs checked) |
 
 To collect data for a stage, run the one below it: blobs for a classifier
 are collected at stage 1 behind the table it will be trained with.

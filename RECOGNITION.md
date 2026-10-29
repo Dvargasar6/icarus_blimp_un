@@ -569,7 +569,7 @@ queden abiertas se hacen al implementar cada funcionalidad.
 | **P6 — Cambios en tcview** ✓ | Calibración por etapa (+ comandos de umbral en el firmware, NVS v6), zoom con lupas, relleno de interior | Tests; capturas a 1280×720 |
 | **C0 — Medir antes de la CNN** | Microbenchmark de conv 3×3 int8 en el board | Ciclos/MAC medidos; decisión 16 vs 24 y `cnn_k` |
 | **P7 — Etapa 3, núcleo** ✓ | `train_cnn.py` (numpy), `blob_cnn.{c,h}` (registro `TCCN`, guarda `lut_id`), etapa 3 en `tc_pipeline`, equivalencia bit a bit C ↔ referencia entera en numpy | `make test`, pytest |
-| **P8 — Etapa 3 en la GUI y en el board** | Train/Verify/Firmware para la etapa 3; corrida larga | 0 filas `dt≠80`; temperatura ≥ 10 min; mejora medida sobre la etapa 2 |
+| **P8 — Etapa 3 en la GUI y en el board** ✓ GUI (falta el board, §13) | Train/Verify/Firmware para la etapa 3; corrida larga | 0 filas `dt≠80`; temperatura ≥ 10 min; mejora medida sobre la etapa 2 |
 | **D — `!dump` y carga a NVS** | Leer y escribir registros de modelo por serie, con CRC | Modelo leído = modelo instalado |
 | **R — Rango** | Corrección con 3–4 distancias medidas; calibración de FOV | Error de rango antes/después |
 
@@ -672,6 +672,31 @@ modelo inválido o de otra tabla queda `NULL`) y en cada cuadro llama a
 Los mismos archivos forman `host/libblob_detect.so`, que usan tcview, los
 entrenadores y `eval_frames.py`: lo que el PC verifica es lo que la cámara
 ejecuta.
+
+---
+
+## 13. Pruebas en el board (cuando todo esté implementado)
+
+Una sola sesión, en este orden: cada paso usa lo que dejó el anterior. Todo
+desde tcview (`python -m tcview --port /dev/ttyACM0`, env `targetcam`). Lo que
+hay que anotar va en **negrita**; con eso se completan el report (§11.5,
+§12.3) y las fases B3, C0 y C3.
+
+| # | Qué | Cómo | Resultado esperado / qué anotar |
+|---|---|---|---|
+| 1 | Firmware actual (P5) | Firmware → *Build* → *Flash…* (BOOT, reconectar, *BOOT held — flash now*, soltar, reconectar, *Reconnect and check*) | Banner "the installed table"; `#!CFG` con `thr2=`, `thr3=`, `cnn_id=` (firmware con P6–P7). **Que el asistente funcione en cada paso** |
+| 2 | Ajustes v7 | Consola: `?`, luego `!save`, desconectar y reconectar el USB | El banner de arranque dice `settings loaded from flash` (un registro v5/v6 previo se lee sin perder la calibración) |
+| 3 | Costo de la CNN (C0) | Image & calibration → etapa 3 → *Measure the CNN on the camera*; repetir con `!cnnbench 24` en la consola | **µs por recorte y ciclos por multiplicación-acumulación, a 16 y a 24**. Decide 16 vs 24 y `cnn_k` |
+| 4 | Instalar un juego con etapa 2 (B3) | Firmware → `tabla_1_s3` → *Install* → *Build* → *Flash…* | Banner "table and classifier are the installed ones" |
+| 5 | Tiempo de la etapa 2 | Consola `!stage 2`; Flight data → *Reset counts*; 60 s con globo y desorden | **`dt≠80` (debe ser 0), `t_b_us` p50/máx, `loop_us` máx, % de filas con objetivo** |
+| 6 | Umbral en vivo | Image & calibration → etapa 2 → *Threshold* 70, luego 0 | `#!CFG thr2=70 clf_thr=0.70`, y de vuelta `clf_thr=0.50`; las cajas del PC siguen a las de la cámara |
+| 7 | Etapa 3 (C3) | Train → etapa 3 sobre `tabla_1_s3` (o el juego que se elija) → Firmware → instalar, compilar, flashear → `!stage 3` | Banner "table, classifier and CNN are the installed ones" |
+| 8 | Tiempo de la etapa 3 | Flight data → *Reset counts*; **10 minutos** con escena | **`dt≠80` (0), `t_c_us` p50/máx, `loop_us` máx**; **temperatura de la placa al inicio y al final** (termómetro o tacto: anotar si quema) |
+| 9 | `!cnnk` | `!cnnk 1`, `!cnnk 4`, mirar `t_c_us` | `t_c_us` crece con el número de blobs revisados |
+| 10 | Captura con ganancias iguales | Un solo `Wc` + `!save`; capturar y etiquetar sesiones nuevas (con globos naranja/rosado y vacíos) en ≥ 2 lugares o momentos | Datos para reentrenar 1–3 y que la verificación pueda concluir (§11.4) |
+
+Si algo falla, el log de la pestaña Firmware y la consola tienen *Copy*; con
+eso y el número de paso basta para seguir.
 
 ---
 
