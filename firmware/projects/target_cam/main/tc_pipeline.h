@@ -36,12 +36,16 @@ extern "C" {
 
 #define TC_STAGE_MAX    3
 
+struct blob_clf;        /* blob_clf.h, which includes this file */
+
 /* Validated models, one per learned stage; NULL = absent. Each becomes a
    concrete type in the phase that introduces its stage. */
 typedef struct {
     const uint8_t *lut; /* stage 1: colour table, COLOR_LUT_BYTES of bits
                            (color_lut.h)                                      */
-    const void *clf;    /* stage 2: blob classifier (Phase B2)                */
+    const struct blob_clf *clf; /* stage 2: blob classifier (blob_clf.h). The
+                           caller passes it only behind the colour table it
+                           was trained with (blob_clf.h, lut_id).            */
     const void *cnn;    /* stage 3: int8 CNN (Phase C2)                       */
 } tc_models_t;
 
@@ -49,7 +53,12 @@ typedef struct {
     blob_result_t r;            /* blobs that survived every stage that ran   */
     int     stage;              /* effective stage, 0..TC_STAGE_MAX           */
     float   conf[BLOB_MAX_REPORT];  /* per reported blob, 0..1; -1 = not
-                                   computed (stage < 2) or empty slot         */
+                                   computed (stage < 2) or empty slot. From
+                                   stage 2 every reported blob has conf >=
+                                   the classifier's threshold: the rest were
+                                   dropped, and the survivors moved up in
+                                   size order. r.n_blobs drops by the same
+                                   count; r.matched (pixels) does not.       */
     int32_t t_px_us;            /* per-pixel colour test (HSV or table)       */
     int32_t t_b_us;             /* blob features + classifier                 */
     int32_t t_c_us;             /* crops + CNN                                */
@@ -57,6 +66,9 @@ typedef struct {
     int     n_feat;             /* entries of feat[] filled: r.n_report when
                                    features were computed, else 0             */
     blob_feat_t feat[BLOB_MAX_REPORT];  /* per reported blob (blob_feat.h)    */
+    int     n_rejected;         /* blobs stage 2 dropped from the report:
+                                   colour-stage blobs whose conf fell below
+                                   the classifier's threshold. 0 below 2.    */
 } tc_result_t;
 
 /* tc_pipeline_run() flags. */
@@ -135,6 +147,8 @@ typedef enum {
     TC_MODEL_VERSION,       /* a payload format this firmware does not read   */
     TC_MODEL_SIZE,          /* the payload size is not this kind's            */
     TC_MODEL_CRC,           /* corrupt                                        */
+    TC_MODEL_VALUE,         /* intact, but a value in it cannot be used (a
+                               non-finite weight, a threshold outside 0..1)   */
 } tc_model_err_t;
 
 /* Check a record of the given kind. On TC_MODEL_OK, *payload points into
@@ -143,7 +157,7 @@ tc_model_err_t tc_model_open(const uint8_t *rec, size_t len, const char magic[4]
                              uint16_t version, uint32_t payload_len,
                              const uint8_t **payload, uint32_t *train_id);
 
-/* "ok", "short", "magic", "version", "size", "crc". */
+/* "ok", "short", "magic", "version", "size", "crc", "value". */
 const char *tc_model_err_str(tc_model_err_t e);
 
 #ifdef __cplusplus

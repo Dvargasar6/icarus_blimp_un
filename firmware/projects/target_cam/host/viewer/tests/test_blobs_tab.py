@@ -151,6 +151,7 @@ def test_copy_texts_keep_the_old_wording(tab):
         "label     not",
         "stage 1   conf -1   fw c2ba88a-dirty   fv 1",
         "white bal. unrecorded",
+        "table id  not recorded",
         "centroid  83.2, 50.8   area 103",
         "box       10,20 - 30,40",
         "crop      x 8  y 18  side 24"])

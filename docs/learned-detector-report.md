@@ -890,3 +890,86 @@ started from `w2` at 64,64,64:
 It converged in 4 steps to **81,64,76**. The offset fit from the first run
 had predicted 82,77 (§10.8 simulation). That agreement supports the fit but
 does not prove it: it is one more scene under the same light.
+
+---
+
+## 11. Phase B2: the blob classifier, first run on fixed-gain frames (2026-10-29)
+
+### 11.1 What was built
+
+Ported to this branch from `recognize-interface` (commit `c362037`), where it
+was written: `main/blob_clf.{c,h}` (logistic regression on the 12 standardised
+features, record magic `TCBC`, 180 B, carrying the train id of the colour
+table it was trained behind), stage 2 in `tc_pipeline.c` (blobs below the
+threshold are dropped, the rest move up in size order), the boot check in
+`target_main.c` (`clf=ok|none|bad|mismatch`, `clf_id=` in `#!CFG`), and
+`host/train/train_clf.py` (Newton's method, L2 penalty and threshold chosen
+by leave-one-session-out on a frame cost: false blob 1 on empty frames +
+frames whose blob 1 is not the balloon + balloons lost). With no classifier
+installed `main/models/clf_model.h` is a placeholder and stage 2 falls back
+to 1. The C suites, 223 viewer tests and the firmware build pass (one viewer
+layout test, `test_image_keeps_most_of_a_small_screen`, fails before and
+after the port: the image gets scale 0.84 at 1024×600).
+
+One change to the trainer, from the run below: a setting that loses more than
+`--max-lost` (10 %) of the balloons stage 1 found on held-out frames is
+EXCLUDED. Without it the search chose a classifier that drops every blob
+(cost 66 = all 66 balloons lost, against 94 for stage 1 alone).
+
+### 11.2 Data (measured)
+
+Fixed white-balance frames in `target_cam/data/train`, grouped by capture
+session (the `s3/table_*` and `s3/classifier_*` folders are one session split
+by balloon colour, so holding out one of them is not a held-out session):
+
+| Session | Frames | Gains R,G,B | Balloon frames | Others |
+|---|---|---|---|---|
+| s1 | 44 | 64,64,80 (and 63,64,81) | 26 red | orange balloon, room |
+| s3 | 120 | 76,64,75 | 40 red | orange, pink balloon, room |
+| s4 | 4 | 77,64,74 | 0 | room |
+
+Orange and pink balloons are painted as background, as §9.2 planned.
+
+### 11.3 Results (measured; table 1792216162 unless stated)
+
+- **Stage 1 alone puts a false blob 1 on 77 of 102 frames without a red
+  balloon**, mostly the orange and pink balloons. A table retrained on s1 + s3
+  + s4 (sigma 8, k 5, 8 510 colours) does no better: 63 of 80 on its own s3
+  training frames, and every setting of its search is EXCLUDED for false
+  blob 1 when s3 is held out. On colour alone, these balloons are not
+  separable in these frames.
+- **The classifier lowers the held-out cost only from 94 to 83** (l2 10,
+  threshold 0.25): 65 false blob 1s remain, and 2 more balloons are lost.
+  Largest weights: `sat_mean` +0.66, `ring` −0.45, `hue_spread` +0.40.
+- **Mean hue of each blob's centre** (saturated pixels of the 12×12 crop
+  centre, median per folder):
+
+  | Session | Red balloon | Orange | Pink |
+  |---|---|---|---|
+  | s1 (64,64,80) | −18° | −22° | — |
+  | s3 (76,64,75) | +1° | +9° to +10° | −33° to −35° |
+  | test/red_s1 (64,64,80) | −28° | −27° (orange_s1) | — |
+
+### 11.4 Reading (reasoned, not shown)
+
+- Inside s3, one set of gains, the three balloons sit apart in mean hue
+  (red +1°, orange +10°, pink −34°), with some overlap between red and
+  orange. A classifier given a colour-position feature could use that.
+- Between sessions the red balloon itself moves about 20° (−18° in s1, +1°
+  in s3), more than the red–orange gap, which is what §10.7 found with AWB
+  frozen. Both sessions were white-card calibrated, so either the card or
+  the light differed, or `Wc`'s result does not make colour comparable
+  across light; s1's 64,64,80 leaves R at unity, unlike every other
+  calibration seen (81,64,76 on the first board run). Not established which.
+- So the 12 features cannot be expected to reject another balloon, and
+  colour cannot be trusted across sessions until the gains are. The next
+  data should hold the gains equal across sessions (one `Wc`, saved, reused),
+  and stage 2 or 3 should be judged on the orange/pink frames of a session
+  it did not see.
+
+### 11.5 Not established
+
+- Whether a mean-hue feature (`BLOB_FEAT_VERSION` 2) or the stage 3 CNN on
+  the crops separates the balloons across sessions.
+- Whether `Wc` gives the same gains for the same light on two days.
+- Nothing in this section has run on the board; no classifier is installed.

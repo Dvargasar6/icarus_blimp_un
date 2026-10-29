@@ -21,12 +21,16 @@ Each frame is run with the settings the camera had when it was saved (its
 .json), unless --cfg gives one settings file for all of them, which is how
 two calibrations are compared on the same frames. From stage 1 up the pixel
 test is the colour table, not the HSV settings: the committed one
-(main/models/lut_model.bin) unless --lut names another record.
+(main/models/lut_model.bin) unless --lut names another record. Stage 2 adds
+the blob classifier: the committed one if it belongs to the committed table,
+or the record --clf names, which must belong to the table in use. The pixel
+figures do not change at stage 2 (the classifier drops blobs, not pixels).
 
 Usage:
   eval_frames.py target_cam/data/frames
   eval_frames.py --stage 1 --cfg some_frame.json target_cam/host/testdata
   eval_frames.py --stage 1 --lut /tmp/lut/lut_model.bin target_cam/host/testdata
+  eval_frames.py --stage 2 --lut T/lut_model.bin --clf T/clf_model.bin DIR
   eval_frames.py --csv scores.csv DIR
 
 Exit status 2 if no labelled frame was found.
@@ -61,14 +65,16 @@ def main(argv=None) -> int:
                     "settings for every frame")
     ap.add_argument("--lut", type=Path, help="a colour table record for stage >= 1 "
                     "(default: the committed main/models/lut_model.bin)")
+    ap.add_argument("--clf", type=Path, help="a blob classifier record for stage >= 2, "
+                    "trained behind the table in use (default: the committed one, if it is)")
     ap.add_argument("--csv", type=Path, help="also write one row per frame here")
     ap.add_argument("-q", "--quiet", action="store_true", help="totals only")
     a = ap.parse_args(argv)
 
     try:
-        m = D.models(a.lut)
+        m = D.models(a.lut or (D.LUT_MODEL if a.clf else None), a.clf)
     except (OSError, D.ModelError) as e:
-        print("cannot use %s: %s" % (a.lut, e))
+        print("cannot use %s: %s" % (a.clf or a.lut, e))
         return 2
 
     st_all = None
@@ -120,6 +126,9 @@ def main(argv=None) -> int:
                                  sum(1 for s in without if s.b1 == "false"), len(without)))
     if m.lut and max(stages) >= 1:
         print("colour table  id %d, %s" % (m.lut_id, m.lut_path))
+    if m.clf and max(stages) >= 2:
+        print("classifier    id %d, threshold %.2f, %s" % (m.clf_id, m.clf_model.threshold,
+                                                          m.clf_path))
     test = "/".join("HSV window" if n == 0 else "colour table" for n in stages)
     print("pixels        precision %s %%  recall %s %%   (%s; on labelled pixels only)" % (
         pct(L.ratio(tot["px_tp"], tot["px_tp"] + tot["px_fp"])),

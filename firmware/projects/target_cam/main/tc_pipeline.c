@@ -2,11 +2,13 @@
  * tc_pipeline - see tc_pipeline.h for what and why.
  *
  * Stage 1 (Phase A2) is the colour table: the same detector with a different
- * pixel test, switched in through cfg->lut. Stage 2's features (Phase B1) are
- * computed here, but its classifier is not trained yet, so a request for
- * stage 2 or 3 still falls back to 1 (or 0) and the rows say so.
+ * pixel test, switched in through cfg->lut. Stage 2 (Phase B2) computes each
+ * reported blob's features (Phase B1) and drops the blobs the classifier does
+ * not believe. Stage 3 has no model yet, so a request for it falls back.
  */
 #include "tc_pipeline.h"
+
+#include "blob_clf.h"
 
 #include <string.h>
 
@@ -40,6 +42,39 @@ int tc_pipeline_mask(const blob_cfg_t *cfg, int stage_req, const tc_models_t *m,
     return blob_mask(&c, frame, mask);
 }
 
+/* Stage 2: keep the blobs the classifier believes, in their size order, and
+   compact them to the front so blob 1 is the largest believed one. A frame
+   whose every blob is rejected reports no target (found 0), which is what
+   the S3 must see: "nothing worth steering to", not the best of bad blobs.
+
+   Only the reported blobs are classified. A balloon that was the fifth
+   largest red blob is not promoted when one of the four above it is
+   rejected: blob_detect keeps no record of it. At blimp ranges four false
+   blobs larger than a balloon are not expected (reasoned, not measured). */
+static void classify(const struct blob_clf *clf, tc_result_t *out)
+{
+    blob_result_t *r = &out->r;
+    int n = 0;
+    for (int k = 0; k < r->n_report; k++) {
+        float p = blob_clf_conf(clf, &out->feat[k]);
+        if (p < clf->threshold) continue;
+        r->b[n] = r->b[k];
+        out->feat[n] = out->feat[k];
+        out->conf[n] = p;
+        n++;
+    }
+    out->n_rejected = r->n_report - n;
+    for (int k = n; k < BLOB_MAX_REPORT; k++) {
+        memset(&r->b[k], 0, sizeof r->b[k]);
+        memset(&out->feat[k], 0, sizeof out->feat[k]);
+        out->conf[k] = -1.0f;
+    }
+    r->n_report = n;
+    r->n_blobs -= out->n_rejected;
+    r->found = n > 0;
+    out->n_feat = n;
+}
+
 int tc_pipeline_run(const blob_cfg_t *cfg, int stage_req, int flags,
                     const tc_models_t *m, const uint8_t *frame, void *work,
                     blob_clock_fn now_us, tc_result_t *out)
@@ -49,6 +84,7 @@ int tc_pipeline_run(const blob_cfg_t *cfg, int stage_req, int flags,
     out->stage = tc_stage_effective(stage_req, m);
     out->t_b_us = 0;
     out->t_c_us = 0;
+    out->n_rejected = 0;
     for (int k = 0; k < BLOB_MAX_REPORT; k++) out->conf[k] = -1.0f;
 
     /* Stage 1 changes only the pixel test. Labelling, the moments and the
@@ -68,6 +104,7 @@ int tc_pipeline_run(const blob_cfg_t *cfg, int stage_req, int flags,
         for (int k = 0; k < out->r.n_report; k++)
             blob_features(&c, frame, &out->r.b[k], &out->feat[k]);
         out->n_feat = out->r.n_report;
+        if (out->stage >= 2) classify(m->clf, out);
         out->t_b_us = now_us ? (int32_t)(now_us() - tb) : 0;
     }
 
@@ -132,6 +169,7 @@ const char *tc_model_err_str(tc_model_err_t e)
     case TC_MODEL_VERSION: return "version";
     case TC_MODEL_SIZE:    return "size";
     case TC_MODEL_CRC:     return "crc";
+    case TC_MODEL_VALUE:   return "value";
     }
     return "?";
 }

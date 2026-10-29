@@ -44,6 +44,13 @@ The .npz holds only plain arrays (np.load(..., allow_pickle=False) reads it):
                                   Colour from different gains is not comparable
                                   (learned-detector report §10.7), so a training
                                   set should not mix them blindly
+  lut_id      (N,) int64          train id of the colour table the blob was found
+                                  behind: live, the camera's #!CFG lut_id when the
+                                  record arrived; frame, the PC's table. 0 = the
+                                  camera had none, -1 = not known (files from
+                                  before the column). Only meaningful at stage >= 1:
+                                  a stage 2 classifier is valid behind that table
+                                  alone (train_clf.py checks it)
   feat_version, csv_version, crop_size   scalars
   feat_names  (F,) str
 """
@@ -60,6 +67,7 @@ from . import labels as L
 from . import protocol as P
 
 BALLOON, NOT_BALLOON, UNLABELLED = 1, 0, -1
+UNKNOWN_LUT = -1
 
 
 @dataclass
@@ -82,6 +90,7 @@ class Sample:
     fv: int = P.FEAT_VERSION
     wb: str = "unrecorded"
     wb_gain: tuple = P.UNKNOWN_GAIN
+    lut_id: int = UNKNOWN_LUT
 
     def rgb(self) -> np.ndarray:
         return P.rgb565_to_rgb888(self.crop)
@@ -95,11 +104,13 @@ def verdict(conf: float) -> int:
     return BALLOON if conf >= 0.5 else NOT_BALLOON
 
 
-def from_record(rec: P.BlobRec) -> Sample:
+def from_record(rec: P.BlobRec, lut_id: int = UNKNOWN_LUT) -> Sample:
+    """lut_id: the camera's table at the time (#!CFG lut_id); the #!BLOB
+    header does not carry it, so the viewer supplies it."""
     return Sample(rec.feat.astype(np.float32), rec.crop.astype(np.uint16), verdict(rec.conf),
                   "live", "t%d" % rec.t_ms, rec.t_ms, rec.k, rec.stage, rec.cx, rec.cy,
                   rec.area, tuple(rec.box), tuple(rec.crop_box), rec.conf, rec.fw, rec.fv,
-                  rec.wb, tuple(rec.wb_gain))
+                  rec.wb, tuple(rec.wb_gain), lut_id)
 
 
 def auto_label(lab: np.ndarray, cx: float, cy: float) -> int:
@@ -132,7 +143,8 @@ def from_frame(sf: L.SavedFrame, lab: np.ndarray | None = None, stage: int = 1,
         out.append(Sample(np.array(list(tr.feat[k].v), np.float32), D.crop(st, data, box),
                           auto_label(lab, b.cx, b.cy), "frame", frame_ref(sf), sf.frame.t_ms,
                           k, tr.stage, b.cx, b.cy, b.area, (b.x0, b.y0, b.x1, b.y1), box,
-                          float(tr.conf[k]), "pc", wb=wb, wb_gain=gain))
+                          float(tr.conf[k]), "pc", wb=wb, wb_gain=gain,
+                          lut_id=m.lut_id if tr.stage >= 1 else 0))
     return out
 
 
@@ -181,6 +193,7 @@ def save(path: Path, samples: list[Sample]):
         crop_box=col(lambda s: s.crop_box, np.int32).reshape(n, 3),
         fw=col(lambda s: s.fw, str), wb=col(lambda s: s.wb, str),
         wb_gain=col(lambda s: s.wb_gain, np.uint8).reshape(n, 3),
+        lut_id=col(lambda s: s.lut_id, np.int64),
         feat_version=np.int32(fvs.pop() if fvs else P.FEAT_VERSION),
         csv_version=np.int32(P.CSV_VERSION), crop_size=np.int32(P.CROP),
         feat_names=np.array(D.feat_names()),
@@ -191,6 +204,7 @@ def load(path: Path) -> list[Sample]:
     z = np.load(path, allow_pickle=False)
     fv = int(z["feat_version"])
     has_wb = "wb" in z.files
+    has_lut = "lut_id" in z.files
     out = []
     for i in range(len(z["label"])):
         out.append(Sample(z["feat"][i], z["crop"][i], int(z["label"][i]), str(z["source"][i]),
@@ -201,7 +215,8 @@ def load(path: Path) -> list[Sample]:
                           str(z["fw"][i]), fv,
                           str(z["wb"][i]) if has_wb else "unrecorded",
                           tuple(int(v) for v in z["wb_gain"][i]) if has_wb
-                          else P.UNKNOWN_GAIN))
+                          else P.UNKNOWN_GAIN,
+                          int(z["lut_id"][i]) if has_lut else UNKNOWN_LUT))
     return out
 
 

@@ -48,8 +48,10 @@
 #include "camera_pins.h"
 #include "blob_detect.h"
 #include "color_lut.h"
+#include "blob_clf.h"
 #include "tc_pipeline.h"
 #include "models/lut_model.h"
+#include "models/clf_model.h"
 #include "link.h"
 #include "settings.h"
 
@@ -180,7 +182,16 @@ static uint32_t    s_lut_id;          /* the table's train id; #!CFG lut_id= */
    is also what the later NVS upload (Phase D) needs, so both delivery paths
    end in the same buffer, checked by the same color_lut_load(). */
 static uint8_t s_lut[COLOR_LUT_BYTES];
+
+/* The classifier, unpacked from its record at boot. Its state adds one value
+   to the lut's: "mismatch", an intact classifier trained behind a different
+   colour table than the one built in. Its features would be computed on
+   other pixels than it learned from, so it is left out (stage 2 runs as 1). */
+#ifndef CLF_MODEL_NONE
+static blob_clf_t  s_clf;
+#endif
 static const char *s_clf_state = "none";
+static uint32_t    s_clf_id;          /* its train id; #!CFG clf_id=          */
 static const char *s_cnn_state = "none";
 
 /* Busy time of the previous loop iteration, from waking up to the end of its
@@ -581,7 +592,7 @@ static void print_cfg(void)
     printf("#!CFG w=%d h=%d cell=%d hue=%d tol=%d sat=%d val=%d area=%d mm=%.0f "
            "fov=%.1f fps=%.3g period_ms=%.1f sensor_us=%.0f awb=%d wb=%s "
            "wb_gain=%d,%d,%d wb_fixed=%d,%d,%d be=%d preset=%s baud=%d image=%d stream=%d settings=%s stage=%d stage_eff=%d lut=%s lut_id=%u "
-           "clf=%s cnn=%s cnn_k=%d csv=%d fw=%s collect=%d fv=%d flip=%d\n",
+           "clf=%s cnn=%s cnn_k=%d csv=%d fw=%s collect=%d fv=%d flip=%d clf_id=%u\n",
            FRAME_W, FRAME_H, s_cfg.cell, s_cfg.hue, s_cfg.hue_tol, s_cfg.sat_min,
            s_cfg.val_min, s_cfg.min_area, s_target_mm, s_hfov_deg, frame_fps(),
            period_ms(), s_sensor_us, s_wb, wb_name(s_wb), g[0], g[1], g[2],
@@ -591,7 +602,7 @@ static void print_cfg(void)
            s_stage_req, tc_stage_effective(s_stage_req, &s_models),
            s_lut_state, (unsigned)s_lut_id, s_clf_state, s_cnn_state, s_cnn_k, CSV_VERSION,
            esp_app_get_description()->version, s_collect ? 1 : 0, BLOB_FEAT_VERSION,
-           s_flip ? 1 : 0);
+           s_flip ? 1 : 0, (unsigned)s_clf_id);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1245,9 +1256,13 @@ static void wb_cal_step(const uint8_t *frame)
  * k of n reported, the stage that ran, the CSV and feature versions and the
  * firmware, so a dataset row can always be traced to the code that made it;
  * the blob's centroid, area and box; the crop's source square; the stage's
- * confidence (-1 until stage 2 has a classifier); the features, %.6g, which
- * is float precision; and the white balance the pixels were made with, since
- * colour features from different gains are not comparable (report §10.7).
+ * confidence (-1 below stage 2); the features, %.6g, which is float
+ * precision; and the white balance the pixels were made with, since colour
+ * features from different gains are not comparable (report §10.7).
+ *
+ * At stage 2 the records cover only the blobs the classifier kept, because
+ * those are the ones reported. Training data for the classifier is therefore
+ * collected at stage 1, where every blob the colour table finds is sent.
  */
 static void send_blob_records(const tc_result_t *tr, int n, int64_t t_ms)
 {
@@ -1361,6 +1376,28 @@ static void load_models(void)
         printf("# models        colour table REFUSED (%s): stage 1 and above unavailable\n",
                tc_model_err_str(e));
     }
+#ifdef CLF_MODEL_NONE
+    printf("# models        no blob classifier built in: stage 2 unavailable\n");
+#else
+    e = blob_clf_load(clf_model_rec, sizeof clf_model_rec, &s_clf, &id);
+    if (e != TC_MODEL_OK) {
+        s_clf_state = "bad";
+        printf("# models        blob classifier REFUSED (%s): stage 2 unavailable\n",
+               tc_model_err_str(e));
+    } else if (s_models.lut == NULL || s_clf.lut_id != s_lut_id) {
+        s_clf_state = "mismatch";
+        s_clf_id = id;
+        printf("# models        blob classifier id %u was trained behind colour table %u, "
+               "not this one (%s %u): stage 2 unavailable\n", (unsigned)id,
+               (unsigned)s_clf.lut_id, s_lut_state, (unsigned)s_lut_id);
+    } else {
+        s_models.clf = &s_clf;
+        s_clf_state = "ok";
+        s_clf_id = id;
+        printf("# models        blob classifier ok: id %u, threshold %.3f, behind table %u\n",
+               (unsigned)id, (double)s_clf.threshold, (unsigned)s_clf.lut_id);
+    }
+#endif
     fflush(stdout);
 }
 
@@ -1577,9 +1614,9 @@ void app_main(void)
 
         /* Features are computed on every frame while collecting, not only
            on the frames whose records go out, so t_b_us in the rows is a
-           steady figure. Asking for stage 2 turns them on too: with no
-           classifier yet the stage falls back, but t_b_us then measures what
-           stage 2 will cost at 80 ms with nothing else changed. */
+           steady figure. Asking for stage 2 turns them on too: the
+           classifier needs them, and if it is missing and the stage falls
+           back, t_b_us still measures what stage 2 would cost at 80 ms. */
         int flags = (s_collect || s_stage_req >= 2) ? TC_RUN_FEATURES : 0;
         int64_t t0 = esp_timer_get_time();
         tc_result_t tr;

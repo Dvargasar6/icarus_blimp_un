@@ -261,13 +261,17 @@ def main(argv=None) -> int:
     ap.add_argument("--top", type=int, default=8, help="search rows to print")
     a = ap.parse_args(argv)
 
+    # A session is named by its folder, or parent/folder where two chosen
+    # folders share a name (data/test/red_s1, data/train/Without_AWB/red_s1):
+    # keyed by name alone, the second would silently replace the first.
+    names = [d.name for d in a.sessions]
     sessions = {}
     for d in a.sessions:
         fr = load_session(d)
         if not fr:
             print("no labelled frames in %s" % d)
             return 2
-        sessions[d.name] = fr
+        sessions["%s/%s" % (d.parent.name, d.name) if names.count(d.name) > 1 else d.name] = fr
     fixed = a.sigma is not None and a.k is not None
     if not fixed and len(sessions) < 2:
         print("choosing sigma and k needs two or more sessions; give --sigma and --k")
@@ -315,7 +319,8 @@ def main(argv=None) -> int:
 
     meta = dict(train_id=train_id, sigma=best["sigma"], k=best["k"],
                 min_evidence=best["min_evidence"], colours=colours,
-                sessions=list(sessions), frames={n: [f.sf.stem.name for f in fr]
+                sessions=list(sessions), session_paths=[str(d) for d in a.sessions],
+                frames={n: [f.sf.stem.name for f in fr]
                                                  for n, fr in sessions.items()},
                 objective="leave-one-session-out mean pixel F1; no false blob 1 on held-out empty frames",
                 caveat="parameters chosen on the same folds they are scored on",

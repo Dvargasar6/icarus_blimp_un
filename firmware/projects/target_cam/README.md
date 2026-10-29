@@ -285,6 +285,61 @@ venue sessions alone and compare that line again.
 | The same test fails: `does not hold the frames` | Frames were added, removed or relabelled after training | Copy the session again, or retrain from `host/testdata/` |
 | Balloon found in the frames but not in the hall | Different light or white balance from training | Collect a session there, retrain; meanwhile fly stage 0 |
 
+## Training the blob classifier (stage 2)
+
+Stage 2 drops the blobs that passed the colour table but do not look like a
+balloon. Each reported blob gets a confidence from its 12 features
+(`main/blob_feat.c`: shape, surface, context) by logistic regression
+(`main/blob_clf.h`); blobs below the model's threshold are removed and the
+rest move up, so blob 1 is the largest blob the classifier believes. The
+method and its first scores are in `docs/learned-detector-report.md` §11.
+
+**A classifier belongs to one colour table.** The features are computed on
+the pixels the table accepts, so its record carries the table's train id.
+The camera uses it only behind that table: otherwise the boot log says so and
+`#!CFG` reads `clf=mismatch` (stage 2 then runs as 1). Retraining the table
+means retraining the classifier.
+
+1. **Label sessions with false blobs.** The classifier learns from what the
+   table reports: every blob whose centroid is in a painted balloon is a
+   balloon, every other one is not. Sessions with no false blobs teach it
+   nothing about them. Orange and pink balloons painted as background, doors,
+   lamps and windows are what it needs.
+2. **Train it behind the table**, two or more sessions so it can choose the
+   L2 penalty and the threshold by leaving one session out:
+   ```bash
+   python host/train/train_clf.py --lut models/T/lut_model.bin --out models/T data/train/red_s1 data/train/orange_s1 ...
+   ```
+   It prints, for the same held-out frames, stage 1 alone and the chosen
+   setting, as a cost: false blob 1 on empty frames + frames whose blob 1 is
+   not a balloon + balloons lost. A setting that loses more than `--max-lost`
+   (10 %) of the balloons stage 1 found is marked `EXCLUDED`, so "drop
+   everything" can never win. If no fold can learn (a held-out session
+   leaves only one kind of blob behind), it says so; give `--l2` and
+   `--threshold` instead.
+
+   A session can also be a **blob set** (`.npz`), collected live with
+   `!collect 1` and labelled in tcview's Blobs tab; folders and sets can be
+   mixed. Collect it with this table flashed and `!stage 1`: tcview records the
+   camera's `lut_id` with every blob, and the trainer refuses a set found
+   behind another table, and one found at stage 0 (HSV finds other blobs)
+   unless `--allow-stage0`. A set from before tcview recorded `lut_id` is
+   used with a `DATA WARNING`, as are sessions with different white-balance
+   gains. A set holds only the balloons the table found, so its FN counts
+   balloons the classifier drops, not ones the table missed: judge the
+   result on frame folders (step 3).
+3. **Judge it** like a table, at stage 2, on sessions it did not see:
+   ```bash
+   python host/tools/eval_frames.py --stage 2 --lut models/T/lut_model.bin --clf models/T/clf_model.bin data/test/...
+   ```
+   Use it only if it removes false blob 1s without losing balloons the table
+   alone found. A `WARNING` from the trainer means it did not on the held-out
+   sessions.
+4. **Install** `clf_model.{bin,h,json}` with its table, rebuild, flash, and send `!stage 2` then `!save`. The boot
+   log reads `# models        blob classifier ok: id …, threshold …, behind
+   table …`. `main/models/clf_model.h` is a placeholder (`CLF_MODEL_NONE`) while
+   no classifier is installed.
+
 ## First power-up checklist
 
 1. Run `host/target_monitor.py --port /dev/ttyACM0`. Check that rows arrive and
@@ -365,10 +420,12 @@ otherwise have recalibrated the colour or stopped the stream.
 `period_ms` in `#!CFG` has one decimal, like `dt_ms`, and `sensor_us` is the
 sensor's frame period as the driver's timestamps measure it. `#!CFG` ends with
 the learned-detector state: `stage=` (requested) `stage_eff=`
-(running) `lut= clf= cnn=` (`ok`, `none` or `bad` for each model) `lut_id=`
+(running) `lut= clf= cnn=` (`ok`, `none` or `bad` for each model; `clf` can
+also be `mismatch`, a classifier trained behind another colour table) `lut_id=`
 (the colour table's train id, 0 without one) `cnn_k=`
 `csv=2` (the row format) `fw=` (the app version) `collect=` (`!collect`, 0 or 1)
-`fv=` (the blob feature definition, `BLOB_FEAT_VERSION`) `flip=` (`!flip`, 0 or 1).
+`fv=` (the blob feature definition, `BLOB_FEAT_VERSION`) `flip=` (`!flip`, 0 or 1)
+`clf_id=` (the classifier's train id, 0 without one).
 After `awb=` (0, 1 or 2) come `wb=` (`frozen`, `auto` or `fixed`) `wb_gain=`
 (the R,G,B gains in use, `0,0,0` when they are not known: in auto and frozen)
 and `wb_fixed=` (the gains `w2` would use, kept while in auto).
@@ -416,13 +473,13 @@ S3 reader is to be written against v2.
 | `w_px`, `h_px`, `fill` | Bounding box and area/box. A full disc gives ~0.79; mylar reads lower because of the highlight hole. Much lower means an irregular or partly hidden target. |
 | `range_mm` | `target_mm · f / max(w, h)`. **−1** when off (`d0`) or when clipped. |
 | `clipped` | The box touches the frame edge, so part of the target is out of view. |
-| `blobs` | Blobs at or above `min_area` in the frame. Can exceed 4. |
+| `blobs` | Blobs at or above `min_area` in the frame. Can exceed 4. At stage 2, minus the ones the classifier rejected. |
 | `matched_px` | Matching pixels in the whole frame. Rising with no blob means scattered colour clutter: tighten `S` or `T`. |
 | `bN_az`, `bN_el`, `bN_range_mm` | Blobs 2–4, in decreasing size. Absent ones read `0,0,-1`. **Choosing which one is the next waypoint is the navigator's job.** The largest is the nearest, which is not always the next in the course sequence. |
 | `dt_ms` | Measured interval between captures. The loop takes each frame as the sensor completes it, so this is a whole number of sensor frames: 79.968 ms, printed `80.0`, at XCLK 20 MHz. A capture off that period also prints a `# late capture` comment saying why. |
 | `proc_us` | Detector cost, all stages. Labelling time is `proc_us − t_px_us − t_b_us − t_c_us`. |
 | `stage` | The level that **ran** for this row (0–3), after any fallback. |
-| `conf`, `bN_conf` | Confidence 0–1 of blob 1 and blobs 2–4. **−1 = not computed** (stage < 2) or no blob in that slot. |
+| `conf`, `bN_conf` | Confidence 0–1 of blob 1 and blobs 2–4. **−1 = not computed** (stage < 2) or no blob in that slot. At stage 2 every reported blob has `conf` ≥ the classifier's threshold: the others were dropped and the rest moved up in size order, so `ok=0` can mean "only rejected blobs in view". |
 | `t_px_us` | Pixel-classification pass (HSV at stage 0, the colour table at ≥ 1). |
 | `t_b_us`, `t_c_us` | Blob features + classifier, and crops + CNN. 0 when the stage did not run. Below stage 2, `t_b_us` is the features alone when they are asked for (`!collect 1`, or `!stage 2` falling back with no classifier), so their cost can be measured before a classifier exists. |
 | `loop_us` | CPU busy time of the **previous** loop, from the frame's arrival to after its row was handed to the UART and any command was answered. This is the CPU figure to hold against the 80 ms period. It does **not** include the row's time on the wire: printf returns once the row is in the UART's 128 B hardware FIFO, and a 129 B row then takes another ~11 ms to go out. That is a separate budget, which `csv_report.py` reports as `wire`. |
@@ -435,10 +492,13 @@ or records from `--port` without resetting the camera.
 
 ### Blob records (`!collect`)
 
-Stage 2 will be a classifier that looks at each reported blob and decides
+Stage 2 is a classifier that looks at each reported blob and decides
 "balloon or not", because the false blobs that pass the colour table (a red
 door, a chair, a shirt) differ from a mylar balloon in shape and surface, not
-in colour. Phase B1 only collects the data it will learn from. With
+in colour (see [Training the blob classifier](#training-the-blob-classifier-stage-2)).
+These records are data for it. **Collect at stage 1**: at stage 2 the records
+cover only the blobs the classifier kept, so the ones it rejects, which are
+what it must keep learning from, would be missing. With
 `!collect 1`, on every 4th frame and on every frame it sends to the PC
 (`g`, `v1`), the camera sends, after that frame's row, one packet per
 reported blob:
@@ -515,6 +575,12 @@ combination of present models; stage 0 through the pipeline equal to
 injected clock. For stage 1 it checks that a table built from an HSV setting
 gives stage 0's result and mask bit for bit, and that a damaged model record
 is refused with the right reason and leaves the caller's table untouched.
+For stage 2 it checks that a classifier record is refused for damage, for
+another feature count or version and for values it cannot fly (a threshold
+outside 0–1, a non-finite weight); that the confidence is the logistic
+formula; and that a classifier that believes every blob changes nothing,
+one that believes none reports no target, and one in between drops exactly
+the blobs below threshold and moves the rest up in order.
 
 `make test` last runs `test_blob_feat`: the features of shapes with known
 answers (a disc's fill of π/4, a rectangle's aspect ln(w/h), a highlight's
@@ -542,7 +608,9 @@ measured distances (see the checklist).
 | `main/tc_pipeline.h/.c` | The staged detector entry point the camera and the viewer both call: stage fallback, per-stage timing, `tc_crc32()`, the model record check. Portable C. |
 | `main/blob_feat.h/.c` | Blob features and 24×24 crops for the classifier (Phase B). Portable C, integer per-pixel arithmetic so the PC reproduces it. |
 | `main/color_lut.h/.c` | Stage 1: the learned colour table (one bit per RGB565 value, 8 kB), its record loader and the HSV-equivalent table the tests use. Portable C. |
+| `main/blob_clf.h/.c` | Stage 2: the blob classifier (logistic regression on the 12 features, 160 B), its record loader and the confidence. Portable C. |
 | `main/models/lut_model.{h,bin,json}` | The trained colour table: the C array the firmware compiles in, the same bytes for the PC tools, and how it was made. Generated by `host/train/train_lut.py`; do not edit. |
+| `main/models/clf_model.{h,bin,json}` | The blob classifier, the same way (`host/train/train_clf.py`). With none installed, `clf_model.h` alone, a placeholder. |
 | `main/target_main.c` | Camera setup, pacing, calibration, mask dump, bearing/range, CSV, commands. |
 | `main/link.h/.c` | Binary packets (`#!FRAME`, `#!BLOB`; CRC-32, one sequence counter) and run-time baud changes with the 3 s safety revert. |
 | `main/settings.h/.c` | Versioned settings record in NVS (`!save` / `!load` / `!reset`). |
@@ -556,6 +624,7 @@ measured distances (see the checklist).
 | `host/tools/eval_frames.py` | Scores the camera's pipeline on hand-labelled saved frames: blob TP/FN/FP/split, blob 1, pixel precision/recall. `--stage 1` uses the committed table, `--lut` another. |
 | `host/tools/blobs_from_frames.py` | A blob dataset (`.npz`: features, crops, labels) from hand-labelled saved frames, labelled from the paint. Same format as the viewer's Blobs tab. |
 | `host/train/train_lut.py` | Trains the colour table from labelled sessions, choosing its parameters by leave-one-session-out, and writes `main/models/lut_model.*`. Runs in the viewer's `targetcam` env. |
+| `host/train/train_clf.py` | Trains the stage 2 blob classifier behind one colour table, from frame folders or blob sets (`.npz`), choosing its L2 penalty and threshold by leave-one-session-out on frame outcomes, and writes `clf_model.*` beside the table (`--out`, default the table's folder). |
 | `host/target_monitor.py` | Live viewer with an azimuth gauge, and a CSV logger (needs `pyserial`). |
 | `host/viewer/` | `tcview`: image, hand calibration, flight-data, frame-labelling and blob-collection screens (PyQt6, own conda env). `tcview/labels.py` holds the label format and the scoring rule that `eval_frames.py` shares; `tcview/blobset.py` the blob dataset format. |
 | `host/testdata/` | The labelled test set: two capture sessions of the red balloon (`red_s1`, `red_s2`; 14 balloon frames, 6 clutter-only), each frame as `.rgb565` + `.json` + `.png` + `.labels.png`. Baseline numbers in `docs/learned-detector-report.md`. |

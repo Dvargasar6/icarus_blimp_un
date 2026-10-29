@@ -406,7 +406,15 @@ class BlobsTab(QWidget):
             self._refresh_agreement()
         now = time.monotonic()
         self._live_t = [t for t in self._live_t if now - t < 10.0] + [now]
-        self.add([B.from_record(rec)])
+        self.add([B.from_record(rec, self._lut_id())])
+
+    def _lut_id(self) -> int:
+        """The camera's colour table now, for the record: #!BLOB does not
+        carry it, and a classifier is valid behind one table only."""
+        try:
+            return int(self.cfg["lut_id"])
+        except (KeyError, TypeError, ValueError):
+            return B.UNKNOWN_LUT
 
     # ---- samples ------------------------------------------------------------
 
@@ -679,6 +687,7 @@ class BlobsTab(QWidget):
                           "label     %s" % LABEL_TEXT[s.label],
                           "stage %d   conf %.3g   fw %s   fv %d" % (s.stage, s.conf, s.fw, s.fv),
                           "white bal. %s" % P.wb_text(s.wb, s.wb_gain),
+                          "table id  %s" % (s.lut_id if s.lut_id >= 0 else "not recorded"),
                           "centroid  %.1f, %.1f   area %d" % (s.cx, s.cy, s.area),
                           "box       %d,%d - %d,%d" % s.box,
                           "crop      x %d  y %d  side %d" % s.crop_box])

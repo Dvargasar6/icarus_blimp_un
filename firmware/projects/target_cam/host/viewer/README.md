@@ -183,6 +183,11 @@ its 24×24 crop at ×3, framed grey (unlabelled, "?"), green (balloon) or red
   reads it). **Load dataset…** appends one. If the window closes with unsaved
   samples, they are written to `target_cam/data/blobs/blobs_autosave_*.npz`
   rather than lost.
+- Each live sample also keeps the camera's colour table id (`lut_id` from
+  the last `#!CFG`; the `#!BLOB` header does not carry it). A classifier is
+  valid behind one table only, so `train_clf.py` uses a set to train it only
+  if its blobs were found behind that table. For a set meant for training,
+  collect at `!stage 1` with the table flashed.
 
 **The agreement line is the board check.** The classifier will be trained on
 features the PC computes and run on features the camera computes, so the two

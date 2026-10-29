@@ -2,7 +2,7 @@
 The camera's own detector, called from Python.
 
 host/libblob_detect.so is the camera's portable sources (../main/blob_detect.c,
-tc_pipeline.c, color_lut.c and blob_feat.c, the list is SRC in host/Makefile) compiled for
+tc_pipeline.c, color_lut.c, blob_feat.c and blob_clf.c, the list is SRC in host/Makefile) compiled for
 this PC: the same files the firmware runs. So the viewer's mask overlay, its per-pixel
 H/S/V readout and its region statistics are the camera's arithmetic, not a
 Python re-implementation that could drift from it (the hue of a pixel, for
@@ -28,12 +28,16 @@ LIB_PATH = HOST_DIR / "libblob_detect.so"
 SOURCES = [MAIN_DIR / n for n in ("blob_detect.c", "blob_detect.h",
                                    "tc_pipeline.c", "tc_pipeline.h",
                                    "color_lut.c", "color_lut.h",
-                                   "blob_feat.c", "blob_feat.h")]
+                                   "blob_feat.c", "blob_feat.h",
+                                   "blob_clf.c", "blob_clf.h")]
 # The colour table the firmware compiles in (main/models/lut_model.h holds the
 # same bytes; a host test checks they agree).
 LUT_MODEL = MAIN_DIR / "models" / "lut_model.bin"
+# The blob classifier (stage 2), when one is installed. It belongs to one
+# colour table (blob_clf.h), so it is offered only behind that table.
+CLF_MODEL = MAIN_DIR / "models" / "clf_model.bin"
 COLOR_LUT_BYTES = 8192
-MODEL_ERRORS = ["ok", "short", "magic", "version", "size", "crc"]
+MODEL_ERRORS = ["ok", "short", "magic", "version", "size", "crc", "value"]
 
 BLOB_MAX_REPORT = 4
 TC_STAGE_MAX = 3
@@ -65,7 +69,8 @@ class BlobResult(C.Structure):
 class TcModels(C.Structure):
     """tc_models_t: validated model pointers, NULL = absent. The buffers
     they point into are kept on the instance (_keep), so they live exactly as
-    long as the models do. lut_id is the table's train id, 0 when absent."""
+    long as the models do. lut_id is the table's train id, 0 when absent;
+    clf_id and clf_path the same for the classifier."""
     _fields_ = [("lut", C.c_void_p), ("clf", C.c_void_p), ("cnn", C.c_void_p)]
 
     def __init__(self, *a, **k):
@@ -73,6 +78,16 @@ class TcModels(C.Structure):
         self._keep = []
         self.lut_id = 0
         self.lut_path = None
+        self.clf_id = 0
+        self.clf_path = None
+        self.clf_model = None
+
+
+class BlobClf(C.Structure):
+    """blob_clf_t (blob_clf.h). Its size is checked against the library's
+    at load, so a field added on one side cannot shift the other's."""
+    _fields_ = [("lut_id", C.c_uint32), ("threshold", C.c_float), ("bias", C.c_float),
+                ("mean", C.c_float * 12), ("scale", C.c_float * 12), ("w", C.c_float * 12)]
 
 
 class BlobFeat(C.Structure):
@@ -88,7 +103,7 @@ class TcResult(C.Structure):
                 ("conf", C.c_float * BLOB_MAX_REPORT),
                 ("t_px_us", C.c_int32), ("t_b_us", C.c_int32), ("t_c_us", C.c_int32),
                 ("t_total_us", C.c_int32), ("n_feat", C.c_int),
-                ("feat", BlobFeat * BLOB_MAX_REPORT)]
+                ("feat", BlobFeat * BLOB_MAX_REPORT), ("n_rejected", C.c_int)]
 
     def features(self) -> np.ndarray:
         """(n_feat, BLOB_FEAT_N) float32: the features of the reported blobs,
@@ -157,6 +172,13 @@ def load_library() -> C.CDLL:
     lib.color_lut_from_hsv.argtypes = [P(BlobCfg), C.c_void_p]
     lib.color_lut_from_hsv.restype = None
     lib.color_lut_count.argtypes = [C.c_void_p]
+    lib.blob_clf_load.argtypes = [C.c_char_p, C.c_size_t, P(BlobClf), P(C.c_uint32)]
+    lib.blob_clf_conf.argtypes = [P(BlobClf), P(BlobFeat)]
+    lib.blob_clf_conf.restype = C.c_float
+    lib.blob_clf_struct_bytes.restype = C.c_size_t
+    if lib.blob_clf_struct_bytes() != C.sizeof(BlobClf):
+        raise RuntimeError("blob_clf_t is %d bytes in the library, %d here"
+                           % (lib.blob_clf_struct_bytes(), C.sizeof(BlobClf)))
     return lib
 
 
@@ -284,21 +306,71 @@ def lut_models(record: bytes | None = None, bits: np.ndarray | bytes | None = No
     return m
 
 
+def load_clf(record: bytes) -> tuple[BlobClf, int]:
+    """(model, train id) from a classifier record, checked by the C
+    blob_clf_load exactly as the camera checks it at boot."""
+    out = BlobClf()
+    tid = C.c_uint32()
+    e = lib().blob_clf_load(record, len(record), C.byref(out), C.byref(tid))
+    if e != 0:
+        raise ModelError("blob classifier refused: %s" % MODEL_ERRORS[e])
+    return out, tid.value
+
+
+def add_clf(m: TcModels, record: bytes, path=None, strict: bool = True) -> TcModels:
+    """Offer a classifier behind m's colour table. One trained behind
+    another table is refused (ModelError) when strict, and otherwise left
+    out, which is what the camera does with it (clf=mismatch)."""
+    clf, tid = load_clf(record)
+    if not m.lut or clf.lut_id != m.lut_id:
+        if strict:
+            raise ModelError("blob classifier %d was trained behind colour table %d, not %d"
+                             % (tid, clf.lut_id, m.lut_id))
+        return m
+    m.clf = C.cast(C.pointer(clf), C.c_void_p)
+    m._keep.append(clf)
+    m.clf_model = clf
+    m.clf_id = tid
+    m.clf_path = path
+    return m
+
+
 _MODELS = None
 
 
-def models(lut_path=None) -> TcModels:
-    """The models the firmware compiles in, or the table at lut_path. With no
-    table file, no models: every request then falls back to stage 0, as the
-    camera does."""
+def models(lut_path=None, clf_path=None) -> TcModels:
+    """The models the firmware compiles in, or the table at lut_path (and the
+    classifier at clf_path, which must belong to that table). With no table
+    file, no models: every request then falls back to stage 0, as the camera
+    does. The firmware's classifier is offered only when it belongs to the
+    firmware's table, as on the camera."""
     global _MODELS
     if lut_path is not None:
         p = Path(lut_path)
-        return lut_models(record=p.read_bytes(), path=p)
+        m = lut_models(record=p.read_bytes(), path=p)
+        if clf_path is not None:
+            add_clf(m, Path(clf_path).read_bytes(), Path(clf_path))
+        return m
+    if clf_path is not None:
+        raise ValueError("a classifier needs the colour table it belongs to (lut_path)")
     if _MODELS is None:
-        _MODELS = lut_models(record=LUT_MODEL.read_bytes(), path=LUT_MODEL) \
+        m = lut_models(record=LUT_MODEL.read_bytes(), path=LUT_MODEL) \
             if LUT_MODEL.exists() else TcModels()
+        if m.lut and CLF_MODEL.exists():
+            try:
+                add_clf(m, CLF_MODEL.read_bytes(), CLF_MODEL, strict=False)
+            except ModelError:
+                pass                        # refused: the camera runs stage 1 too
+        _MODELS = m
     return _MODELS
+
+
+def clf_conf(clf: BlobClf, feat) -> float:
+    """blob_clf_conf() for one feature vector."""
+    f = BlobFeat()
+    for i, v in enumerate(np.asarray(feat, np.float32)):
+        f.v[i] = float(v)
+    return float(lib().blob_clf_conf(C.byref(clf), C.byref(f)))
 
 
 def hsv_table(st: Settings) -> np.ndarray:

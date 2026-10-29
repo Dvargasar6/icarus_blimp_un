@@ -11,8 +11,10 @@ LDLIBS := -lm
 
 # Every portable source the camera runs. The tests and the viewer's library
 # all build from this one list, so a new stage cannot be left out of one.
-SRC := ../main/blob_detect.c ../main/tc_pipeline.c ../main/color_lut.c ../main/blob_feat.c
-HDR := ../main/blob_detect.h ../main/tc_pipeline.h ../main/color_lut.h ../main/blob_feat.h
+SRC := ../main/blob_detect.c ../main/tc_pipeline.c ../main/color_lut.c ../main/blob_feat.c \
+       ../main/blob_clf.c
+HDR := ../main/blob_detect.h ../main/tc_pipeline.h ../main/color_lut.h ../main/blob_feat.h \
+       ../main/blob_clf.h
 
 .PHONY: all test lib clean
 all: test_blob_detect test_pipeline test_blob_feat lib
