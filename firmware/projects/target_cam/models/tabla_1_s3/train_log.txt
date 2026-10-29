@@ -1,0 +1,24 @@
+table_red  20 frames   16691 balloon px (3295 colours)   364558 background px
+table_orange 10 frames       0 balloon px (0 colours)   192000 background px
+table_pink 10 frames       0 balloon px (0 colours)   192000 background px
+table_env  20 frames       0 balloon px (0 colours)   384000 background px
+
+leave one session out, 1 settings, best first:
+  sigma    8  k    7  min_ev 0.5  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 18 split 0  false b1 9/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 20 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP 10 split 0  false b1 6/20  px P   0.0 R   nan
+
+WARNING: every setting puts a false blob 1 on a held-out frame without a
+balloon. Do not fly this table. Check those frames' labels (is the balloon
+really out of view?) with eval_frames.py, and keep the current table.
+
+final table: sigma 8  k 7  min_evidence 0.5, trained on table_red + table_orange + table_pink + table_env: 6771 colours, id 1793156551
+  on table_red (training data, optimistic) TP 20 FN 0 FP  5 split 2  false b1 0/0  px P  79.1 R  72.8
+  on table_orange (training data, optimistic) TP 0 FN 0 FP 17 split 0  false b1 9/10  px P   0.0 R   nan
+  on table_pink (training data, optimistic) TP 0 FN 0 FP 17 split 0  false b1 7/10  px P   0.0 R   nan
+  on table_env (training data, optimistic) TP 0 FN 0 FP 10 split 0  false b1 7/20  px P   0.0 R   nan
+wrote tables/tabla_1_s3/lut_model.{bin,h,json}
+next: eval_frames.py --stage 1 --lut tables/tabla_1_s3/lut_model.bin data/train/s3/table_red data/train/s3/table_orange data/train/s3/table_pink data/train/s3/table_env
+      and, to use it, copy lut_model.* into main/models/, rebuild and flash
