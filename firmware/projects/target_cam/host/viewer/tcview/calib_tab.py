@@ -43,7 +43,7 @@ from .ui import persist, theme
 from .ui.keys import HintButton, add_shortcut
 from .ui.widgets import (Banner, CollapsibleSection, FlowLayout, GripSplitter,
                          PixelImageView, ReadoutCard, ReadoutStrip, SegmentedButtons,
-                         StripSplitter, ToggleSwitch, value_label)
+                         StripSplitter, ToggleSwitch, ZoomControl, value_label)
 from .widgets import AMBER, GREEN, GREY, RED, HueBar, ParamControl, _SpinBox, chip
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"      # target_cam/data
@@ -58,6 +58,7 @@ PARAMS = {
     "area": ("a%d", "area"),
     "mm": ("d%d", "mm"),
     "fov": ("F%.1f", "fov"),
+    "thr2": ("!thr2 %d", "thr2"),       # classifier threshold, hundredths; 0 = the model's
 }
 
 # The detector levels '!stage N' selects (tc_pipeline.h). Each falls back to
@@ -127,6 +128,7 @@ class CalibTab(QWidget):
         self._region_stats = None           # (hue, spread, matched fraction) for the summary
         self.compare_text = ""
         self.region_text = ""
+        self._last_req = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -142,7 +144,7 @@ class CalibTab(QWidget):
 
         # The firmware defaults, until the camera's #!CFG says otherwise.
         for key, v in (("hue", 0), ("tol", 12), ("sat", 110), ("val", 50), ("area", 25),
-                       ("mm", 550), ("fov", 54.0)):
+                       ("mm", 550), ("fov", 54.0), ("thr2", 0)):
             self.p[key]._set_widgets(v)
         for key, ctl in self.p.items():
             ctl.changed.connect(lambda _v: self._redraw())
@@ -151,6 +153,7 @@ class CalibTab(QWidget):
         add_shortcut(self, "C", self.cal_btn.click)
         self._show_settings()
         self._show_hover()
+        self._apply_stage_view()
         self._redraw()
 
     # ---- remembered layout (§9) --------------------------------------------------
@@ -175,6 +178,7 @@ class CalibTab(QWidget):
         v.setContentsMargins(8, 8, 4, 0)
         v.setSpacing(6)
 
+        self.view = PixelImageView(W, H)
         tb = QWidget()
         flow = FlowLayout(tb, hspacing=16, vspacing=6)
         flow.setContentsMargins(0, 0, 0, 0)
@@ -192,9 +196,7 @@ class CalibTab(QWidget):
         self.show_boxes.setChecked(True)
         self.show_boxes.toggled.connect(lambda *_: self._redraw())
         flow.addWidget(_group(_key("Overlay"), self.overlay_mode, self.show_boxes))
-        self.zoom_seg = SegmentedButtons([("fit", "Fit"), ("2", "2×"), ("3", "3×"), ("4", "4×")])
-        self.zoom_seg.setToolTip("Zoom (also Ctrl+wheel). Pan with the scroll bars, "
-                                 "middle-drag or Space+drag.")
+        self.zoom_seg = ZoomControl(self.view)
         self.save_btn = QPushButton("Save frame…")
         self.save_btn.setToolTip("PNG for viewing, the raw .rgb565 bytes and the settings as "
                                  ".json (enough to replay this frame through the host tests).")
@@ -214,7 +216,6 @@ class CalibTab(QWidget):
         flow.addWidget(_group(self.zoom_seg, self.save_btn, self.flip_btn))
         v.addWidget(tb)
 
-        self.view = PixelImageView(W, H)
         # Where the camera's 'c' samples: the 16x16 centre patch.
         c0x, c0y = (W - D.CAL_PATCH) // 2, (H - D.CAL_PATCH) // 2
         self.view.set_guides([(c0x, c0y, D.CAL_PATCH, D.CAL_PATCH)])
@@ -223,8 +224,6 @@ class CalibTab(QWidget):
         self.view.hovered.connect(self._hover_at)
         self.view.left.connect(self._hover_left)
         self.view.regionChanged.connect(lambda _r: self._update_region())
-        self.zoom_seg.changed.connect(self.view.set_zoom)
-        self.view.zoomChanged.connect(lambda k: self.zoom_seg.set_value(k, emit=False))
 
         self.strip = self._build_readouts()
         self.vsplit = StripSplitter(self.view, self.strip)
@@ -404,12 +403,16 @@ class CalibTab(QWidget):
         return s
 
     def _build_colour(self) -> CollapsibleSection:
-        s = CollapsibleSection("Colour test")
-        # The stage decides which colour test runs. From stage 1 up it is the
-        # colour table, and the HSV controls below no longer change which
-        # pixels match: they are kept, and used again at stage 0.
+        s = CollapsibleSection("Detector")
+        # The stage chosen here decides which calibration is shown: the HSV
+        # window for stage 0, the models (and the classifier's threshold) from
+        # stage 1 up. It is also the stage the camera runs to collect data for
+        # the next one: blobs for a classifier are collected behind the table
+        # it will be trained with. The HSV settings are kept whatever the
+        # stage; they are what stage 0 runs, and every stage falls back to it.
         self.stage_combo = QComboBox()
         self.stage_combo.addItems(STAGE_NAMES)
+        self.stage_combo.currentIndexChanged.connect(lambda _i: self._apply_stage_view())
         b = QPushButton("Set")
         b.setToolTip("!stage N. Not saved until 'Save to camera'.")
         b.clicked.connect(lambda: self.main.send("!stage %d" % self.stage_combo.currentIndex()))
@@ -417,6 +420,12 @@ class CalibTab(QWidget):
         self.stage_lbl = Banner("neutral", "")
         self.stage_lbl.hide()
         s.add_widget(self.stage_lbl)
+
+        # ---- stage 0: the HSV window ----
+        self.hsv_panel = QWidget()
+        hp = QVBoxLayout(self.hsv_panel)
+        hp.setContentsMargins(0, 0, 0, 0)
+        hp.setSpacing(4)
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(D.PRESETS)
         pb = QPushButton("Apply")
@@ -424,8 +433,7 @@ class CalibTab(QWidget):
         pb.clicked.connect(lambda: self.main.send("p " + self.preset_combo.currentText()))
         self.preset_lbl = value_label()
         theme.set_prop(self.preset_lbl, "muted", True)
-        s.add_layout(_row(_key("Preset"), self.preset_combo, pb, self.preset_lbl))
-
+        hp.addLayout(_row(_key("Preset"), self.preset_combo, pb, self.preset_lbl))
         self.hsv_box = QWidget()
         hl = QVBoxLayout(self.hsv_box)
         hl.setContentsMargins(0, 4, 0, 0)
@@ -439,21 +447,87 @@ class CalibTab(QWidget):
         self.p["val"] = ParamControl("Min value", 0, 255)
         for k in ("hue", "tol", "sat", "val"):
             hl.addWidget(self.p[k])
-        s.add_widget(self.hsv_box)
+        hp.addWidget(self.hsv_box)
         self._dim = QGraphicsOpacityEffect(self.hsv_box)
         self._dim.setOpacity(0.5)
         self._dim.setEnabled(False)
         self.hsv_box.setGraphicsEffect(self._dim)
-
         self.cal_btn = cal = HintButton("Calibrate on centre", "C")
         cal.setToolTip("Sends 'c': the camera samples the dashed 16x16 centre patch of "
                        "its NEXT frame.")
         cal.clicked.connect(lambda: self.main.send("c"))
-        s.add_layout(_row(cal))
+        hp.addLayout(_row(cal))
         self.cal_lbl = _chip_label(wrap=True)
         self.cal_lbl.hide()
-        s.add_widget(self.cal_lbl)
+        hp.addWidget(self.cal_lbl)
+        s.add_widget(self.hsv_panel)
+
+        # ---- stage 1 and up: the models ----
+        self.model_panel = QWidget()
+        mp = QVBoxLayout(self.model_panel)
+        mp.setContentsMargins(0, 4, 0, 0)
+        mp.setSpacing(4)
+        self.lut_info = value_label(wrap=True)
+        mp.addWidget(self.lut_info)
+        self.clf_panel = QWidget()
+        cp = QVBoxLayout(self.clf_panel)
+        cp.setContentsMargins(0, 4, 0, 0)
+        cp.setSpacing(4)
+        self.clf_info = value_label(wrap=True)
+        cp.addWidget(self.clf_info)
+        self.p["thr2"] = ParamControl("Threshold", 0, 99, unit=" /100")
+        self.p["thr2"].setToolTip(
+            "!thr2: a blob is reported when the classifier's confidence reaches this. "
+            "Higher drops more false blobs and more balloons. 0 = the model's own "
+            "threshold. Save to camera keeps it.")
+        cp.addWidget(self.p["thr2"])
+        hint = QLabel("0 = the model's own threshold · higher = fewer false blobs, more "
+                      "balloons lost")
+        hint.setWordWrap(True)
+        theme.set_prop(hint, "faint", True)
+        cp.addWidget(hint)
+        mp.addWidget(self.clf_panel)
+        self.cnn_info = Banner("info", "Stage 3 (the crop CNN) is not built yet (phase P7): "
+                               "the camera runs stage 2 or lower.")
+        mp.addWidget(self.cnn_info)
+        s.add_widget(self.model_panel)
         return s
+
+    def selected_stage(self) -> int:
+        """The stage chosen in the Detector section (sent with Set)."""
+        return max(0, self.stage_combo.currentIndex())
+
+    def _thr2_models(self):
+        """The firmware's models, the classifier at the threshold the control
+        shows (the camera's !thr2 once applied), so the PC boxes are the
+        camera's from stage 2 up."""
+        t = self.p["thr2"].local
+        return D.with_threshold(D.models(), t / 100.0 if t else None)
+
+    def _apply_stage_view(self):
+        """Show the calibration of the chosen stage, and only that."""
+        sel = self.selected_stage()
+        self.hsv_panel.setVisible(sel == 0)
+        self.sections["region"].setVisible(sel == 0)
+        self.model_panel.setVisible(sel >= 1)
+        self.clf_panel.setVisible(sel >= 2)
+        self.cnn_info.setVisible(sel >= 3)
+        pc, v = D.models(), self.cfg
+        cam_lut = "camera: table %s (%s)" % (v.get("lut_id", "?"), v.get("lut", "?")) if v \
+            else "camera: not connected"
+        self.lut_info.setText("Colour table (stage 1)\n  PC: %s\n  %s" % (
+            "id %d" % pc.lut_id if pc.lut else "none (main/models/lut_model.bin)", cam_lut))
+        if pc.clf:
+            pc_clf = "id %d, threshold %.2f in the model" % (pc.clf_id, pc.clf_model.threshold)
+        else:
+            pc_clf = "none (the Firmware tab installs one)"
+        cam_clf = ("camera: %s%s\n  running threshold %s" % (
+            v.get("clf", "?"), " id %s" % v["clf_id"] if "clf_id" in v else "",
+            "%.2f" % v["clf_thr"] if isinstance(v.get("clf_thr"), (int, float))
+            and v["clf_thr"] >= 0 else "-")) if v else "camera: not connected"
+        self.clf_info.setText("Blob classifier (stage 2)\n  PC: %s\n  %s" % (pc_clf, cam_clf))
+        self.p["thr2"].setEnabled(bool(pc.clf) or v.get("clf") == "ok")
+        self._refresh_summaries()
 
     def _build_blobs(self) -> CollapsibleSection:
         s = CollapsibleSection("Blobs & geometry")
@@ -554,8 +628,11 @@ class CalibTab(QWidget):
 
     def _show_stage(self, v: dict):
         req, eff = v.get("stage", 0), v.get("stage_eff", 0)
-        if 0 <= req < len(STAGE_NAMES):
+        if 0 <= req < len(STAGE_NAMES) and req != self._last_req:
+            # Follow the camera's stage when it changes, not on every #!CFG:
+            # a stage chosen here and not yet Set stays chosen.
             self.stage_combo.setCurrentIndex(req)
+        self._last_req = req
         pc = D.models()
         cam_id = v.get("lut_id", 0)
         if v.get("lut") == "ok" and pc.lut and cam_id != pc.lut_id:
@@ -569,9 +646,10 @@ class CalibTab(QWidget):
             self.stage_lbl.set("warn", "Stage %d requested, running %d (colour table %s)." % (
                 req, eff, v.get("lut", "?")))
         elif eff >= 1:
-            self.stage_lbl.set("info", "Stage %d: colour table %s decides the pixels. Hue, "
-                               "tolerance, sat, value and c have no effect until stage 0."
-                               % (eff, cam_id))
+            self.stage_lbl.set("info", "Stage %d: colour table %s decides the pixels%s. The "
+                               "HSV settings are kept for stage 0." % (
+                                   eff, cam_id, ", the classifier keeps or drops each blob"
+                                   if eff >= 2 else ""))
         else:
             self.stage_lbl.set("neutral", "")
         # At stage 0 the HSV window decides, as the controls say: nothing to flag.
@@ -596,6 +674,7 @@ class CalibTab(QWidget):
         if preset in D.PRESETS:
             self.preset_combo.setCurrentText(preset)
         self._show_settings()
+        self._apply_stage_view()
         self._redraw()
 
     def on_disconnected(self):
@@ -607,6 +686,7 @@ class CalibTab(QWidget):
             ctl.forget_camera()
         self.stage_lbl.set("neutral", "")
         self.stage_lbl.hide()
+        self._last_req = None
         self._dim.setEnabled(False)
         self.preset_lbl.setText("")
         self.live_chk.setChecked(False)
@@ -917,9 +997,13 @@ class CalibTab(QWidget):
         else:
             sec["region"].set_summary("")
         v = self.cfg
-        if v and int(v.get("stage_eff", 0)) >= 1:
-            sec["colour"].set_summary("stage %d · colour table %s" % (
-                int(v.get("stage_eff", 0)), v.get("lut_id", "?")))
+        sel = self.selected_stage()
+        if sel >= 1:
+            t = self.p["thr2"].local
+            sec["colour"].set_summary("stage %d · table %s%s" % (
+                sel, v.get("lut_id", D.models().lut_id or "?"),
+                (" · threshold %s" % ("%.2f" % (t / 100) if t else "model's"))
+                if sel >= 2 else ""))
         else:
             hsv = "H %d° ±%d° · S≥%d · V≥%d" % tuple(self.p[k].local
                                                     for k in ("hue", "tol", "sat", "val"))
@@ -999,7 +1083,7 @@ class CalibTab(QWidget):
             else:
                 self.view.set_overlay(None)
 
-        r = D.pipeline(st, self.frame.data, self.stage()).r
+        r = D.pipeline(st, self.frame.data, self.stage(), self._thr2_models()).r
         boxes = []
         if self.show_boxes.isChecked():
             for k in range(min(r.n_report, D.BLOB_MAX_REPORT)):

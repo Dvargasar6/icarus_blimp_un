@@ -34,7 +34,8 @@ typedef struct {
     int8_t  cnn_k;          /* blobs the CNN checks per frame, 1..4 (v3)      */
     int8_t  flip;           /* image turned 180 deg on top of the build (v4)  */
     uint8_t wb_gain[3];     /* R, G, B gains for awb 2, 64 = 1.0 (v5)         */
-    uint8_t spare;          /* zero; makes the 32 B size explicit             */
+    uint8_t thr2;           /* '!thr2': classifier threshold in hundredths,   *
+                             * 0 = the model's own (v6; v5's zero spare byte) */
 } tc_settings_t;
 
 /* Initialise NVS. A partition that is full or from a newer IDF is erased:
@@ -46,7 +47,8 @@ esp_err_t settings_init(void);
    record loads without that flag: it gains only stage 0, which is what every
    v2 build ran, so nothing the user tuned has changed. Nor does a v3 record:
    it gains flip 0, the image as every v3 build delivered it; nor a v4 one,
-   which gains unity white-balance gains that no v4 build could use. */
+   which gains unity white-balance gains that no v4 build could use, nor a v5
+   one, whose spare byte (zero) reads as thr2 0: the model's own threshold. */
 bool settings_load(tc_settings_t *out, bool *migrated);
 
 esp_err_t settings_save(const tc_settings_t *s);

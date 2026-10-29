@@ -23,8 +23,11 @@
    v5: fixed white-balance gains (awb 2, 'W'). There was no padding left, so
        the struct grew to 32 B. The new fields are appended, so a v1-v4
        record is the first 28 B of a v5 one, and settings_load() reads it by
-       its size. */
-#define VERSION     5
+       its size.
+   v6: 'thr2' (!thr2) in v5's spare byte. A v5 record wrote it as zero,
+       which means "the model's own threshold", so v5 records load as they
+       are: same size, same layout, and the meaning of zero kept. */
+#define VERSION     6
 
 /* The size of tc_settings_t in v1-v4: the part of a v5 record they share. */
 #define OLD_SIZE    28
@@ -95,7 +98,7 @@ bool settings_load(tc_settings_t *out, bool *migrated)
            default, and the caller says so. */
         r.s.period_ms = CONFIG_TARGETCAM_FRAME_PERIOD_MS;
         *migrated = true;
-    } else if (!old && r.version != VERSION) {
+    } else if (!old && r.version != VERSION && r.version != 5) {
         return false;
     }
     *out = r.s;

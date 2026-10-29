@@ -335,6 +335,24 @@ def add_clf(m: TcModels, record: bytes, path=None, strict: bool = True) -> TcMod
     return m
 
 
+def with_threshold(m: TcModels, threshold: float | None) -> TcModels:
+    """m with its classifier run at `threshold` (the camera's !thr2), as
+    target_main.c apply_thr2() does; m itself when there is no classifier or
+    no threshold to apply. The table is shared, the classifier copied."""
+    if not m.clf or threshold is None or threshold <= 0 or \
+            abs(threshold - m.clf_model.threshold) < 1e-6:
+        return m
+    out = TcModels()
+    out.lut, out.lut_id, out.lut_path = m.lut, m.lut_id, m.lut_path
+    out._keep = list(m._keep)
+    clf = BlobClf.from_buffer_copy(m.clf_model)
+    clf.threshold = float(threshold)
+    out.clf = C.cast(C.pointer(clf), C.c_void_p)
+    out._keep.append(clf)
+    out.clf_model, out.clf_id, out.clf_path = clf, m.clf_id, m.clf_path
+    return out
+
+
 _MODELS = None
 
 

@@ -101,6 +101,26 @@ Other controls: the preset menu, white balance (Auto / Frozen / Fixed, the
 fixed R G B gains, and *From white card*, which sends `Wc`), the RGB565 byte order, and
 `c` (calibrate on the centre 16×16 patch, shown dashed on the image).
 
+**The Detector section shows the calibration of the chosen stage only.** Pick
+the stage in *Detector stage* (it follows the camera's, and *Set* sends
+`!stage N`):
+
+| Stage | What is shown |
+|---|---|
+| 0 | The HSV window: preset, hue bar, hue, tolerance, min sat, min value, `c`, and the Region section |
+| 1 | The colour table: its id on the PC and on the camera (the HSV settings are kept for stage 0, hidden) |
+| 2 | Also the blob classifier (PC and camera ids, the threshold it runs with) and its **Threshold** control, `!thr2` in hundredths, 0 = the model's own. The PC boxes run at the threshold the control shows |
+| 3 | Also a note: the crop CNN is not built yet (phase P7) |
+
+To collect data for a stage, run the one below it: blobs for a classifier
+are collected at stage 1 behind the table it will be trained with.
+
+**Zoom** (here and on Label frames): **−** / **+** step through Fit ×1.25 …
+×8, **Fit** goes back; Ctrl+wheel does the same about the cursor. The scale is
+rounded to whole screen pixels, so every camera pixel is the same size, and a
+step that would not change it is skipped. Fit never shrinks the image below
+1:1; on a screen too small for that, it scrolls.
+
 ## Flight data screen
 
 Entering it sends `v0` (image off) and `B115200`, then `k`. It shows:
@@ -139,7 +159,10 @@ The quick way through a frame:
 
 1. **Ellipse** tool (the default), **Balloon** class: drag a box around the
    balloon. Fix the edge with the **Brush**. The right mouse button erases
-   with the current tool.
+   with the current tool. With **Fill interior** (F) ticked, a brush stroke
+   drawn round a region paints its inside too: the stroke is closed from its
+   end back to its start, so the ends need not meet. One Undo takes back the
+   whole stroke.
 2. **Rest -> background**: every unlabelled pixel becomes background, except a
    band (2 px by default) around the balloon, which stays unlabelled.
 3. Check the result and move on with **PgDown**. Labels are saved when you
@@ -150,7 +173,7 @@ what measure false detections. Label the mylar's white highlights as balloon:
 whether that colour should match is the training's decision, made from how
 often it is balloon versus background.
 
-Keys: 1 balloon, 2 background, 0 erase, B/R/E brush/rectangle/ellipse, Ctrl+Z
+Keys: 1 balloon, 2 background, 0 erase, B/R/E brush/rectangle/ellipse, F fill interior, Ctrl+Z
 undo (50 steps), PgDown/PgUp next/previous frame. The list marks labelled
 frames `[x]`. Subfolders are searched, so keep one subfolder per capture
 session. The training uses that to split train and validation by session.

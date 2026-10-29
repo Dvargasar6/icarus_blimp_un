@@ -124,9 +124,13 @@ def test_ctrl_wheel_zooms_about_the_cursor(app, view):
                     Qt.ScrollPhase.NoScrollPhase, False)
     # Sent where Qt sends it: to the canvas, which passes it up to the viewport
     # (at fit the canvas fills the viewport, so the coordinates are the same).
+    fit = view.scale
     QApplication.sendEvent(view.canvas, e)
     app.processEvents()
-    assert view.zoom() == "2" and zs == ["2"]
+    # One step up the ladder: the first factor whose whole-pixel scale is
+    # larger than Fit's.
+    assert view.zoom() != "fit" and zs == [view.zoom()] and view.scale > fit
+    assert view.scale == round(view.scale)
     sx, sy = view.horizontalScrollBar().value(), view.verticalScrollBar().value()
     after = view.to_image(QPointF(a) + QPointF(sx, sy))
     # Within a screen pixel of where it was.
@@ -140,3 +144,35 @@ def test_fit_has_no_scroll_bars_and_zoom_does(app, view):
     app.processEvents()
     assert view.horizontalScrollBar().maximum() > 0 and view.verticalScrollBar().maximum() > 0
     assert view.scale == 4 * fit_scale(view.maximumViewportSize(), 160, 120)
+
+
+def test_plus_minus_always_change_the_scale_in_whole_pixels(app, view):
+    """The ladder is fine, but every + gives a bigger whole-pixel scale and
+    every - a smaller one, back to Fit."""
+    from tcview.ui.widgets import ZoomControl
+    zc = ZoomControl(view)
+    scales = [view.scale]
+    while zc.plus.isEnabled() and view.zoom() != ZOOMS[-1]:
+        zc.plus.click()
+        app.processEvents()
+        if view.scale == scales[-1]:
+            break
+        scales.append(view.scale)
+    assert len(scales) > 3 and scales == sorted(scales) and len(set(scales)) == len(scales)
+    assert all(s == round(s) for s in scales[1:])
+    assert zc.label.text() == "×%s" % view.zoom()
+    while view.zoom() != "fit":
+        before = view.scale
+        zc.minus.click()
+        app.processEvents()
+        assert view.scale < before
+    assert zc.label.text() == "fit" and not zc.minus.isEnabled()
+
+
+def test_fit_never_shrinks_below_one_to_one(app):
+    v = PixelImageView(160, 120)
+    v.resize(100, 80)
+    v.show()
+    app.processEvents()
+    assert v.scale == 1.0 and v.horizontalScrollBar().maximum() > 0
+    v.close()

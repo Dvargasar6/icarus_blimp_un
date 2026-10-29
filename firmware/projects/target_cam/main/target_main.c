@@ -188,10 +188,36 @@ static uint8_t s_lut[COLOR_LUT_BYTES];
    colour table than the one built in. Its features would be computed on
    other pixels than it learned from, so it is left out (stage 2 runs as 1). */
 #ifndef CLF_MODEL_NONE
-static blob_clf_t  s_clf;
+static blob_clf_t  s_clf_rec;         /* as the record holds it               */
+static blob_clf_t  s_clf;             /* what runs: s_clf_rec with '!thr2'    */
 #endif
+/* '!thr2 N': the classifier's threshold in hundredths, 0 = the model's own.
+   The threshold trades lost balloons against false ones, and the right trade
+   depends on the venue's clutter, so it is a setting (saved by !save) rather
+   than something only retraining can change. */
+static int         s_thr2;
 static const char *s_clf_state = "none";
 static uint32_t    s_clf_id;          /* its train id; #!CFG clf_id=          */
+
+/* s_clf = the record's classifier with the '!thr2' threshold, if one is set.
+   Called whenever either changes; with no classifier built in it only keeps
+   the setting. */
+static void apply_thr2(void)
+{
+#ifndef CLF_MODEL_NONE
+    s_clf = s_clf_rec;
+    if (s_thr2 > 0) s_clf.threshold = (float)s_thr2 / 100.0f;
+#endif
+}
+
+/* The threshold stage 2 runs with, or -1 with no classifier running. */
+static float clf_threshold(void)
+{
+#ifndef CLF_MODEL_NONE
+    if (s_models.clf != NULL) return s_clf.threshold;
+#endif
+    return -1.0f;
+}
 static const char *s_cnn_state = "none";
 
 /* Busy time of the previous loop iteration, from waking up to the end of its
@@ -488,6 +514,8 @@ static void live_defaults(void)
     s_preset         = DEFAULT_PRESET;
     s_stage_req      = 0;
     s_cnn_k          = 2;
+    s_thr2           = 0;
+    apply_thr2();
     set_flip(false);
     blob_preset_apply(&s_cfg, s_preset);
     /* Before the camera starts there is no sensor yet; set_wb() then only
@@ -516,6 +544,7 @@ static tc_settings_t live_capture(void)
     t.stage      = (int8_t)s_stage_req;
     t.cnn_k      = (int8_t)s_cnn_k;
     t.flip       = s_flip ? 1 : 0;
+    t.thr2       = (uint8_t)s_thr2;
     memcpy(t.wb_gain, s_wb_gain, sizeof t.wb_gain);
     return t;
 }
@@ -537,7 +566,7 @@ static bool live_apply(const tc_settings_t *t)
         t->preset < -1 || t->preset >= BLOB_PRESET_COUNT ||
         t->stage < 0 || t->stage > TC_STAGE_MAX ||
         t->cnn_k < 1 || t->cnn_k > BLOB_MAX_REPORT ||
-        (t->flip != 0 && t->flip != 1)) {
+        (t->flip != 0 && t->flip != 1) || t->thr2 > 99) {
         return false;
     }
     s_cfg.hue        = t->hue;
@@ -552,6 +581,8 @@ static bool live_apply(const tc_settings_t *t)
     s_preset         = t->preset;
     s_stage_req      = t->stage;
     s_cnn_k          = t->cnn_k;
+    s_thr2           = t->thr2;
+    apply_thr2();
     /* Keep the preset's name only if its numbers still match: a firmware
        update may have retuned the preset since this record was saved. */
     if (s_preset >= 0) {
@@ -592,7 +623,8 @@ static void print_cfg(void)
     printf("#!CFG w=%d h=%d cell=%d hue=%d tol=%d sat=%d val=%d area=%d mm=%.0f "
            "fov=%.1f fps=%.3g period_ms=%.1f sensor_us=%.0f awb=%d wb=%s "
            "wb_gain=%d,%d,%d wb_fixed=%d,%d,%d be=%d preset=%s baud=%d image=%d stream=%d settings=%s stage=%d stage_eff=%d lut=%s lut_id=%u "
-           "clf=%s cnn=%s cnn_k=%d csv=%d fw=%s collect=%d fv=%d flip=%d clf_id=%u\n",
+           "clf=%s cnn=%s cnn_k=%d csv=%d fw=%s collect=%d fv=%d flip=%d clf_id=%u "
+           "thr2=%d clf_thr=%.2f\n",
            FRAME_W, FRAME_H, s_cfg.cell, s_cfg.hue, s_cfg.hue_tol, s_cfg.sat_min,
            s_cfg.val_min, s_cfg.min_area, s_target_mm, s_hfov_deg, frame_fps(),
            period_ms(), s_sensor_us, s_wb, wb_name(s_wb), g[0], g[1], g[2],
@@ -602,7 +634,7 @@ static void print_cfg(void)
            s_stage_req, tc_stage_effective(s_stage_req, &s_models),
            s_lut_state, (unsigned)s_lut_id, s_clf_state, s_cnn_state, s_cnn_k, CSV_VERSION,
            esp_app_get_description()->version, s_collect ? 1 : 0, BLOB_FEAT_VERSION,
-           s_flip ? 1 : 0, (unsigned)s_clf_id);
+           s_flip ? 1 : 0, (unsigned)s_clf_id, s_thr2, (double)clf_threshold());
 }
 
 /* ------------------------------------------------------------------ */
@@ -658,6 +690,7 @@ static void print_banner(void)
            "B<baud> link speed | !save | !load | !reset\n");
     printf("#              !stage <0-3> detector level | "
            "!collect <0|1> blob records for training | !flip <0|1> image 180 deg\n");
+    printf("#              !thr2 <0-99> classifier threshold, hundredths (0 = the model's)\n");
     printf("# columns      t_ms,ok,cx_px,cy_px,az_deg,el_deg,area_px,w_px,h_px,"
            "fill,range_mm,clipped,blobs,matched_px,b2_az,b2_el,b2_range_mm,"
            "b3_az,b3_el,b3_range_mm,b4_az,b4_el,b4_range_mm,dt_ms,proc_us,"
@@ -738,7 +771,7 @@ static cmd_res_t run_store_command(const char *line)
         printf("# saved settings erased; running the Kconfig defaults\n");
         return CMD_OK;
     }
-    snprintf(s_why, sizeof s_why, "unknown (!save !load !reset !stage !collect !flip)");
+    snprintf(s_why, sizeof s_why, "unknown (!save !load !reset !stage !collect !flip !thr2)");
     return CMD_NAK;
 }
 
@@ -765,6 +798,30 @@ static cmd_res_t run_stage_command(const char *line)
     if (eff >= 1) {
         printf("# stage %d: the colour table decides which pixels match; hue, tol, "
                "sat, val and 'c' have no effect until !stage 0\n", eff);
+    }
+    return CMD_OK;
+}
+
+/* '!thr2 N', 0..99: the classifier's threshold in hundredths, 0 for the
+   model's own. A whole word for the same reason as !stage: a stray byte must
+   not change which blobs the blimp is allowed to steer to. Accepted without
+   a classifier too (it is a setting, kept for the next one); the reply says
+   it has no effect then. */
+static cmd_res_t run_thr2_command(const char *line)
+{
+    int v;
+    if (line[5] != ' ' || !arg_in(line + 6, 0, 99, &v)) {
+        snprintf(s_why, sizeof s_why, "usage: !thr2 <0-99> (hundredths; 0 = the model's own)");
+        return CMD_NAK;
+    }
+    s_thr2 = v;
+    apply_thr2();
+    if (s_models.clf == NULL) {
+        printf("# thr2 %d kept, but no classifier is running (clf=%s): no effect now\n",
+               v, s_clf_state);
+    } else {
+        printf("# classifier threshold %.2f (%s)\n", (double)clf_threshold(),
+               v ? "set by !thr2" : "the model's own");
     }
     return CMD_OK;
 }
@@ -877,6 +934,9 @@ static cmd_res_t run_command(const char *line)
         }
         if (strncmp(line, "!flip", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
             return run_flip_command(line);
+        }
+        if (strncmp(line, "!thr2", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+            return run_thr2_command(line);
         }
         return run_store_command(line);
     case 'c':
@@ -1379,23 +1439,25 @@ static void load_models(void)
 #ifdef CLF_MODEL_NONE
     printf("# models        no blob classifier built in: stage 2 unavailable\n");
 #else
-    e = blob_clf_load(clf_model_rec, sizeof clf_model_rec, &s_clf, &id);
+    e = blob_clf_load(clf_model_rec, sizeof clf_model_rec, &s_clf_rec, &id);
+    s_clf = s_clf_rec;
     if (e != TC_MODEL_OK) {
         s_clf_state = "bad";
         printf("# models        blob classifier REFUSED (%s): stage 2 unavailable\n",
                tc_model_err_str(e));
-    } else if (s_models.lut == NULL || s_clf.lut_id != s_lut_id) {
+    } else if (s_models.lut == NULL || s_clf_rec.lut_id != s_lut_id) {
         s_clf_state = "mismatch";
         s_clf_id = id;
         printf("# models        blob classifier id %u was trained behind colour table %u, "
                "not this one (%s %u): stage 2 unavailable\n", (unsigned)id,
-               (unsigned)s_clf.lut_id, s_lut_state, (unsigned)s_lut_id);
+               (unsigned)s_clf_rec.lut_id, s_lut_state, (unsigned)s_lut_id);
     } else {
         s_models.clf = &s_clf;
+        apply_thr2();
         s_clf_state = "ok";
         s_clf_id = id;
         printf("# models        blob classifier ok: id %u, threshold %.3f, behind table %u\n",
-               (unsigned)id, (double)s_clf.threshold, (unsigned)s_clf.lut_id);
+               (unsigned)id, (double)s_clf_rec.threshold, (unsigned)s_clf_rec.lut_id);
     }
 #endif
     fflush(stdout);

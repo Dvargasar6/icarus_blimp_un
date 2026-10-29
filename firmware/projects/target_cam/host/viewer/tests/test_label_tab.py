@@ -62,7 +62,8 @@ def zoom_to_corner(app, tab, zoom):
     app.processEvents()
     if zoom != "fit":
         for sb in (tab.view.horizontalScrollBar(), tab.view.verticalScrollBar()):
-            assert sb.maximum() > 0
+            # A small factor may still fit one way; from 2x it scrolls both.
+            assert sb.maximum() > 0 or float(zoom) < 2
             sb.setValue(sb.maximum())
         app.processEvents()
 
@@ -247,3 +248,44 @@ def test_it_fits_a_1024x600_screen(app, tab):
     app.processEvents()
     assert tab.view.height() >= 0.6 * tab.vsplit.height()
     assert tab.view.scale >= 2
+
+
+@pytest.mark.parametrize("zoom", ("fit", "2.5"))
+def test_fill_interior_paints_inside_a_lasso_even_when_it_does_not_close(app, tab, zoom):
+    """Brush round a region with Fill interior on: the inside is painted too,
+    from the stroke closed end-to-start, and one Undo takes it all back."""
+    tab.tool_seg.set_value("brush")
+    tab.cls_seg.set_value(L.BALLOON)
+    tab.radius.setValue(0)
+    tab.fill_inside.setChecked(True)
+    assert "brush + fill" in tab.view.tool_text
+    tab.view.set_zoom(zoom)
+    app.processEvents()
+    # A square 40..70 x 30..60 whose last side stops 6 px short of the start.
+    drag(tab, (40, 30), (40, 54), via=[(70, 30), (70, 60), (40, 60)])
+    lab = tab.lab
+    assert lab[45, 55] == L.BALLOON and lab[35, 45] == L.BALLOON     # inside
+    assert lab[20, 55] == L.UNLABELLED and lab[45, 80] == L.UNLABELLED  # outside
+    filled = int((lab == L.BALLOON).sum())
+    assert 30 * 30 * 0.85 < filled < 32 * 32
+    tab.do_undo()
+    assert not tab.lab.any()
+
+
+def test_without_fill_interior_only_the_stroke_is_painted(app, tab):
+    tab.tool_seg.set_value("brush")
+    tab.cls_seg.set_value(L.BALLOON)
+    tab.radius.setValue(0)
+    tab.fill_inside.setChecked(False)
+    drag(tab, (40, 30), (40, 54), via=[(70, 30), (70, 60), (40, 60)])
+    assert tab.lab[45, 55] == L.UNLABELLED and tab.lab[30, 55] == L.BALLOON
+
+
+def test_fill_polygon_rule(app, tab):
+    tab.lab[:] = L.UNLABELLED
+    tab.fill_polygon([(10, 10), (20, 10), (20, 20)], L.BACKGROUND)     # a triangle
+    assert tab.lab[12, 18] == L.BACKGROUND and tab.lab[18, 12] == L.UNLABELLED
+    before = tab.lab.copy()
+    tab.fill_polygon([(5, 5), (6, 6)], L.BALLOON)                       # encloses nothing
+    tab.fill_polygon([(5, 5), (5, 5), (5, 5)], L.BALLOON)
+    assert np.array_equal(tab.lab, before)

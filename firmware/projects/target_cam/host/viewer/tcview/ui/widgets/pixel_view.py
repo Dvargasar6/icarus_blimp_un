@@ -15,7 +15,11 @@ mouse events the old Label tab used, a press only becomes a drag once the
 mouse has moved the platform's drag distance; less than that is a click.
 
 Scaling is nearest-neighbour (no smooth-pixmap hint), so a pixel stays a
-square block. Above Fit the canvas is larger than the viewport and the
+square block. Zoom is Fit or a factor on it from a fine ladder (ZOOMS), stepped
+with the - / + buttons (ZoomControl) or Ctrl+wheel; above Fit the scale is
+rounded to whole screen pixels, so every camera pixel is the same size on
+screen, and a step that would not change the rounded scale is skipped. Fit
+never goes below 1:1: on a screen too small for that, the image scrolls. Above Fit the canvas is larger than the viewport and the
 QScrollArea's real scroll bars move it, as small laptop screens need (§13.2);
 middle-drag and Space+drag pan as well.
 """
@@ -31,9 +35,9 @@ from PyQt6.QtWidgets import QApplication, QFrame, QScrollArea, QWidget
 
 from .. import theme
 
-ZOOMS = ("fit", "2", "3", "4")
+ZOOMS = ("fit", "1.25", "1.5", "2", "2.5", "3", "4", "5", "6", "8")   # factors on Fit
 HANDLE_PX = 7           # half-size of a region corner handle, in widget pixels
-MIN_FIT = 0.5           # the fit scale never goes below this (a 80×60 image)
+MIN_FIT = 1.0           # Fit never shrinks a camera pixel below a screen pixel
 
 
 def fit_scale(avail: QSize, w: int, h: int) -> float:
@@ -199,6 +203,22 @@ class PixelImageView(QScrollArea):
     def zoom(self) -> str:
         return self._zoom
 
+    def scale_for(self, key: str) -> float:
+        """The scale a zoom key gives in the current viewport."""
+        fit = fit_scale(self.maximumViewportSize(), self.img_w, self.img_h)
+        return fit if key == "fit" else max(1.0, float(round(fit * float(key))))
+
+    def zoom_step(self, step: int, anchor: Optional[QPoint] = None):
+        """One step up (+1) or down (-1) the ladder, skipping the steps whose
+        rounded scale is the current one."""
+        i = ZOOMS.index(self._zoom)
+        now = self.scale_for(self._zoom)
+        j = i + step
+        while 0 <= j < len(ZOOMS) and self.scale_for(ZOOMS[j]) == now:
+            j += step
+        if 0 <= j < len(ZOOMS):
+            self.set_zoom(ZOOMS[j], anchor)
+
     def set_zoom(self, key: str, anchor: Optional[QPoint] = None):
         """`anchor` is a viewport position that keeps the same image point
         under it (the cursor for Ctrl+wheel); the viewport centre by default."""
@@ -241,10 +261,9 @@ class PixelImageView(QScrollArea):
 
     def _relayout(self):
         avail = self.maximumViewportSize()
-        fit = fit_scale(avail, self.img_w, self.img_h)
-        self.scale = fit if self._zoom == "fit" else fit * int(self._zoom)
+        self.scale = self.scale_for(self._zoom)
         iw, ih = self.img_w * self.scale, self.img_h * self.scale
-        if self._zoom == "fit":
+        if self._zoom == "fit" and iw <= avail.width() and ih <= avail.height():
             cw, ch = avail.width(), avail.height()
             self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -461,8 +480,8 @@ class PixelImageView(QScrollArea):
         if not e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             return False
         step = 1 if e.angleDelta().y() > 0 else -1 if e.angleDelta().y() < 0 else 0
-        i = max(0, min(len(ZOOMS) - 1, ZOOMS.index(self._zoom) + step))
-        self.set_zoom(ZOOMS[i], anchor)
+        if step:
+            self.zoom_step(step, anchor)
         e.accept()
         return True
 
@@ -475,3 +494,52 @@ class PixelImageView(QScrollArea):
 def _diamond(c: QPointF, r: float) -> QPolygonF:
     return QPolygonF([QPointF(c.x(), c.y() - r), QPointF(c.x() + r, c.y()),
                       QPointF(c.x(), c.y() + r), QPointF(c.x() - r, c.y())])
+
+
+class ZoomControl(QWidget):
+    """- / Fit / + for a PixelImageView, with the zoom shown. The same
+    value() / set_value(key) / changed interface the old Fit-2-3-4 buttons
+    had, so the remembered zoom and the view stay in step through it."""
+    changed = pyqtSignal(str)
+
+    def __init__(self, view: "PixelImageView", parent=None):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QHBoxLayout, QLabel, QToolButton
+        self.view = view
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.minus = QToolButton()
+        self.minus.setText("−")
+        self.minus.setToolTip("Zoom out (Ctrl+wheel down)")
+        self.fit = QToolButton()
+        self.fit.setText("Fit")
+        self.fit.setToolTip("The largest size that fits")
+        self.plus = QToolButton()
+        self.plus.setText("+")
+        self.plus.setToolTip("Zoom in (Ctrl+wheel up). Pan with the scroll bars, "
+                             "middle-drag or Space+drag.")
+        self.label = QLabel()
+        theme.mono(self.label)
+        for w in (self.minus, self.fit, self.plus, self.label):
+            lay.addWidget(w)
+        self.minus.clicked.connect(lambda: self.view.zoom_step(-1))
+        self.plus.clicked.connect(lambda: self.view.zoom_step(+1))
+        self.fit.clicked.connect(lambda: self.view.set_zoom("fit"))
+        view.zoomChanged.connect(self._shown)
+        self._shown(view.zoom())
+
+    def value(self) -> str:
+        return self.view.zoom()
+
+    def set_value(self, key: str, emit: bool = True):
+        if key in ZOOMS:
+            self.view.set_zoom(key)
+            self._shown(self.view.zoom())
+
+    def _shown(self, key: str):
+        self.label.setText("fit" if key == "fit" else "×%s" % key)
+        i = ZOOMS.index(key)
+        self.minus.setEnabled(i > 0)
+        self.plus.setEnabled(i < len(ZOOMS) - 1)
+        self.changed.emit(key)

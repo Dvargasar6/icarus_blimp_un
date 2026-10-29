@@ -54,7 +54,7 @@ from .ui import persist, theme
 from .ui.keys import HintButton, add_shortcut
 from .ui.widgets import (Bar, CollapsibleSection, ElidedLabel, GripSplitter, PixelImageView,
                          ReadoutCard, ReadoutStrip, SegmentedButtons, StackedBar,
-                         StatusPill, StripSplitter, value_label)
+                         StatusPill, StripSplitter, ZoomControl, value_label)
 from .widgets import _Slider, _SpinBox
 
 # Label colours over the image: the theme's class colours. Neither is red or
@@ -182,6 +182,7 @@ class LabelTab(QWidget):
         self.dirty = False
         self.undo: list[np.ndarray] = []
         self._drag0 = None
+        self._path: list = []           # the brush stroke so far, for Fill interior
         self._last = None
         self._det = None                # detector result and mask for this frame
         self._mask = None
@@ -210,6 +211,7 @@ class LabelTab(QWidget):
                          ("B", lambda: self.tool_seg.set_value("brush")),
                          ("R", lambda: self.tool_seg.set_value("rect")),
                          ("E", lambda: self.tool_seg.set_value("ellipse")),
+                         ("F", lambda: self.fill_inside.toggle()),
                          ("Ctrl+Z", self.do_undo), ("Ctrl+S", self.save),
                          ("PgDown", lambda: self.step(1)), ("PgUp", lambda: self.step(-1)),
                          ("Right", lambda: self.step(1)), ("Left", lambda: self.step(-1))):
@@ -250,9 +252,8 @@ class LabelTab(QWidget):
         names.setContentsMargins(4, 0, 4, 0)
         name_box.setMinimumWidth(120)
         self.pill = StatusPill("neutral", "no frame")
-        self.zoom_seg = SegmentedButtons([("fit", "Fit"), ("2", "2×"), ("3", "3×"), ("4", "4×")])
-        self.zoom_seg.setToolTip("Zoom (also Ctrl+wheel). Pan with the scroll bars, "
-                                 "middle-drag or Space+drag.")
+        self.view = PixelImageView(160, 120)
+        self.zoom_seg = ZoomControl(self.view)
         tb.addWidget(self.prev_btn)
         tb.addWidget(name_box, 1)
         tb.addWidget(self.next_btn)
@@ -262,13 +263,10 @@ class LabelTab(QWidget):
         tb.addWidget(self.zoom_seg)
         v.addLayout(tb)
 
-        self.view = PixelImageView(160, 120)
         self.view.paint_mode = True
         self.view.hovered.connect(self._hover_at)
         self.view.left.connect(lambda: self._hover_at(None, None))
         self.view.paintStroke.connect(self._stroke)
-        self.zoom_seg.changed.connect(self.view.set_zoom)
-        self.view.zoomChanged.connect(lambda k: self.zoom_seg.set_value(k, emit=False))
 
         self.strip = self._build_stats()
         self.vsplit = StripSplitter(self.view, self.strip, max_share=0.35)
@@ -461,6 +459,13 @@ class LabelTab(QWidget):
         self.radius.setToolTip("0 = one pixel")
         g.addWidget(_key("Brush radius"), 2, 0)
         g.addWidget(self.radius, 2, 1, Qt.AlignmentFlag.AlignLeft)
+        # A lasso: draw round a balloon with the brush and its inside is
+        # painted too. The stroke is closed from its end back to its start, so
+        # it works when the ends do not quite meet, which by hand they never do.
+        self.fill_inside = QCheckBox("Fill interior (F)")
+        self.fill_inside.setToolTip("Brush only: when the stroke ends, it is closed back to "
+                                    "where it started and everything inside is painted too")
+        g.addWidget(self.fill_inside, 3, 1, Qt.AlignmentFlag.AlignLeft)
         g.setColumnStretch(1, 1)
         s.add_layout(g)
         b = QPushButton("Rest → background")
@@ -491,6 +496,7 @@ class LabelTab(QWidget):
         for w in (self.cls_seg, self.tool_seg):
             w.changed.connect(lambda *_: self._paint_changed())
         self.radius.valueChanged.connect(lambda *_: self._paint_changed())
+        self.fill_inside.toggled.connect(lambda *_: self._paint_changed())
         return s
 
     def _build_show(self) -> CollapsibleSection:
@@ -528,8 +534,12 @@ class LabelTab(QWidget):
         cls = CLASS_NAME[self.cls_seg.value()] if self.cls_seg.value() != L.UNLABELLED else "erase"
         tool = TOOL_NAME[self.tool_seg.value()]
         self.sections["paint"].set_summary("%s · %s · r %d px" % (cls, tool, self.radius.value()))
+        if tool == "brush" and self.fill_inside.isChecked():
+            tool = "brush + fill"
+            self.sections["paint"].set_summary("%s · %s · r %d px" % (cls, tool,
+                                                                     self.radius.value()))
         chip = "%s · %s" % (cls, tool)
-        if tool == "brush":
+        if tool.startswith("brush"):
             chip += " r %d" % self.radius.value()
         self.view.set_tool_text(chip)
 
@@ -550,6 +560,7 @@ class LabelTab(QWidget):
         persist.save_zoom(store, self.view)
         store.setValue("opacity", self.opacity.value())
         store.setValue("folder", str(self.folder))
+        store.setValue("fill_inside", self.fill_inside.isChecked())
 
     def restore_state(self, store, folder: bool = True):
         """folder=False keeps the folder the tab was opened on (--label DIR)."""
@@ -557,6 +568,9 @@ class LabelTab(QWidget):
         persist.restore_splitter(store, "vsplit", self.vsplit)
         persist.restore_sections(store, self.sections)
         persist.restore_zoom(store, self.zoom_seg)
+        f = persist.read_bool(store, "fill_inside")
+        if f is not None:
+            self.fill_inside.setChecked(f)
         v = persist.read_int(store, "opacity", self.opacity.minimum(), self.opacity.maximum())
         if v is not None:
             self.opacity.setValue(v)
@@ -723,6 +737,29 @@ class LabelTab(QWidget):
             m = (px >= x0) & (px <= x1) & (py >= y0) & (py <= y1)
         self.lab[m] = cls
 
+    def fill_polygon(self, pts, cls: int):
+        """Paint the pixels whose centres are inside the polygon `pts` (pixel
+        units), closed from its last point back to its first. Even-odd rule,
+        so a stroke that crosses itself leaves the crossed loop's inside
+        alone rather than guessing. Fewer than three distinct points enclose
+        nothing."""
+        p = np.asarray(pts, dtype=float)
+        if len(p) < 3 or len(np.unique(np.round(p, 1), axis=0)) < 3:
+            return
+        h, w = self.lab.shape
+        yy, xx = np.mgrid[0:h, 0:w]
+        px, py = xx + 0.5, yy + 0.5
+        inside = np.zeros((h, w), dtype=bool)
+        x0, y0 = p[:, 0], p[:, 1]
+        x1, y1 = np.roll(x0, -1), np.roll(y0, -1)
+        for ax, ay, bx, by in zip(x0, y0, x1, y1):
+            if ay == by:
+                continue                # a horizontal edge crosses no horizontal ray
+            crosses = (ay > py) != (by > py)
+            xc = ax + (py - ay) * (bx - ax) / (by - ay)
+            inside ^= crosses & (px < xc)
+        self.lab[inside] = cls
+
     def _stroke(self, kind: str, pos, erase: bool):
         """The view's paintStroke. As with the pyqtgraph drag events the tab
         used before, a drag's last position is a move as well as the end."""
@@ -749,6 +786,7 @@ class LabelTab(QWidget):
         self._push_undo()
         self._drag0 = (pos.x(), pos.y())
         self._last = self._drag0
+        self._path = [self._drag0]
 
     def drag_move(self, pos, erase: bool):
         if self.sf is None or self._drag0 is None:
@@ -761,6 +799,7 @@ class LabelTab(QWidget):
             for i in range(1, n + 1):
                 self.dab(lx + (x - lx) * i / n, ly + (y - ly) * i / n, self._cls(erase))
             self._last = (x, y)
+            self._path.append((x, y))
             self._draw_labels()
         else:
             ax, ay = self._drag0
@@ -773,6 +812,8 @@ class LabelTab(QWidget):
         if self._tool() != 0:
             ax, ay = self._drag0
             self.fill_shape(ax, ay, pos.x(), pos.y(), self._tool() == 2, self._cls(erase))
+        elif self.fill_inside.isChecked():
+            self.fill_polygon(self._path, self._cls(erase))
         self.view.set_preview(None)
         self._drag0 = None
         self._changed()

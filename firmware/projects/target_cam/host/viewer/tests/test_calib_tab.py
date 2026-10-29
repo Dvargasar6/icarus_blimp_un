@@ -123,9 +123,20 @@ def test_stage_banner_and_faded_hsv_controls(app, win):
     if D.models().lut:
         cal.on_cfg(cfg(stage=1))
         assert cal.stage_lbl.tone() == "info" and cal._dim.isEnabled()
-        assert cal.sections["colour"].summary().startswith("stage 1 · colour table ")
+        assert cal.sections["colour"].summary().startswith("stage 1 · table ")
+        # Stage 1 shows the models, not the HSV window or the region tools.
+        assert not cal.hsv_panel.isVisibleTo(cal) and cal.model_panel.isVisibleTo(cal)
+        assert not cal.sections["region"].isVisibleTo(cal)
+        assert not cal.clf_panel.isVisibleTo(cal)
     cal.on_cfg(cfg(stage=3, stage_eff=1))
     assert "requested, running 1" in cal.stage_lbl.text() and cal.stage_lbl.tone() == "warn"
+    assert cal.clf_panel.isVisibleTo(cal) and cal.cnn_info.isVisibleTo(cal)
+    # Choosing stage 0 here (not yet Set) brings the HSV window back, and a
+    # later #!CFG with the same camera stage does not undo the choice.
+    cal.stage_combo.setCurrentIndex(0)
+    assert cal.hsv_panel.isVisibleTo(cal) and cal.sections["region"].isVisibleTo(cal)
+    cal.on_cfg(cfg(stage=3, stage_eff=1))
+    assert cal.selected_stage() == 0
     cal.on_disconnected()
     assert cal.stage_lbl.isHidden() and not cal._dim.isEnabled()
     assert cal._settings_text() == "Camera settings: no camera"
@@ -231,3 +242,51 @@ def test_grab_frame_sends_g_and_stays_pressed_briefly(app, win):
     assert sent == ["g"] and cal.grab_btn.isDown()
     pump(app, calib_tab.GRAB_HOLD_MS / 1000 + 0.15)
     assert not cal.grab_btn.isDown()
+
+
+def test_classifier_threshold_control(app, win, monkeypatch):
+    """Stage 2 shows the classifier and its threshold; the control sends
+    !thr2 in hundredths, follows the camera's thr2=, and the PC boxes run
+    at that threshold."""
+    cal = win.calib
+    sent = []
+    monkeypatch.setattr(win, "send", lambda c: sent.append(c) or True)
+    cal.on_cfg(cfg(stage=2, stage_eff=1, clf="none", thr2=0, clf_thr=-1.0))
+    assert cal.clf_panel.isVisibleTo(cal) and not cal.hsv_panel.isVisibleTo(cal)
+    assert "Blob classifier (stage 2)" in cal.clf_info.text()
+    cal.on_cfg(cfg(stage=2, stage_eff=2, clf="ok", clf_id=5, thr2=60, clf_thr=0.6))
+    assert cal.p["thr2"].local == 60 and "running threshold 0.60" in cal.clf_info.text()
+    assert "threshold 0.60" in cal.sections["colour"].summary()
+    cal.p["thr2"].set_local(75, send=True)
+    assert sent[-1] == "!thr2 75"
+
+
+def test_with_threshold_overrides_only_the_threshold():
+    import sys
+    from pathlib import Path
+    import numpy as np
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "train"))
+    import train_clf
+    m = D.models(D.LUT_MODEL)
+    n = D.BLOB_FEAT_N
+    rec = train_clf.record(train_clf.Model(np.zeros(n), np.ones(n), np.ones(n), 0.0, 1.0),
+                           0.5, m.lut_id, 3)
+    D.add_clf(m, rec)
+    m2 = D.with_threshold(m, 0.8)
+    assert m2 is not m and m2.clf_model.threshold == pytest.approx(0.8)
+    assert m.clf_model.threshold == pytest.approx(0.5)              # the original kept
+    assert list(m2.clf_model.w) == list(m.clf_model.w) and m2.lut == m.lut
+    assert D.with_threshold(m, None) is m and D.with_threshold(m, 0.5) is m
+    assert D.with_threshold(D.models(D.LUT_MODEL), 0.8).clf is None   # no classifier
+
+
+def test_fake_camera_takes_thr2():
+    from tcview.fake_cam import FakeCamera
+    cam = FakeCamera()
+    out = []
+    cam._print = out.append
+    assert cam._command("!thr2 40")[0] == "ok"
+    res, why = cam._command("!thr2 100")
+    assert res == "nak" and "0-99" in why and cam.cfg["thr2"] == 40
+    cam._print_cfg()
+    assert " thr2=40 " in out[-1] and "clf_thr=" in out[-1]
