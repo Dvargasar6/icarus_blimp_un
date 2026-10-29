@@ -548,7 +548,7 @@ queden abiertas se hacen al implementar cada funcionalidad.
 | **P1 — Etapa 2, núcleo** ✓ | Port desde la referencia: `blob_clf.{c,h}`, etapa 2 en `tc_pipeline`, carga y `clf_id` en `target_main.c`, `lut_id` en los sets de blobs, `train_clf.py`, `eval_frames.py --clf`, tests. `main/models/clf_model.h` como marcador `CLF_MODEL_NONE` mientras no haya clasificador instalado | `make test`, pytest, firmware compila sin warnings |
 | **P2 — Biblioteca de modelos y motor** ✓ | `models/` (juegos, metadatos, migración de `tables/`), motor de evaluación compartido por Verify y Train, ejecución de entrenadores en segundo plano | Tests del motor |
 | **P3 — Pestaña Train** ✓ | Etapas 1 y 2 (la 3 se activa en P8) | Tests offscreen; un entrenamiento real con `data/train` |
-| **P4 — Pestaña Verify** | Uno y dos modelos, por cuadro, veredicto | Tests; resultados iguales a `eval_frames.py` |
+| **P4 — Pestaña Verify** ✓ | Uno y dos modelos, por cuadro, veredicto | Tests; resultados iguales a `eval_frames.py` |
 | **P5 — Pestaña Firmware** | Respaldo, instalación, compilación, flasheo guiado, comprobación de ids | Tests con un compilador simulado; **en el board**: instalar tabla + clasificador, `!stage 2` |
 | **B3 — Etapa 2 en el board** | `csv_report.py` a `!stage 2`, escena con globo + madera + globo naranja | 0 filas `dt≠80`; `t_b_us`; desaparecen los falsos; el globo se conserva |
 | **P6 — Cambios en tcview** | Calibración por etapa (+ comandos de umbral en el firmware, NVS v6), zoom con lupas, relleno de interior | Tests; capturas a 1280×720 |

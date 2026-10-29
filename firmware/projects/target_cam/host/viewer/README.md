@@ -228,10 +228,37 @@ Image & calibration. Stage 3 (the crop CNN) is phase P7 and greyed out.
   `.json` the trainer wrote: red if the chosen setting puts a false blob 1 on a
   held-out session (do not fly it), amber if it loses balloons or the trainer
   warned, green otherwise. A failed run leaves no folder behind.
-  *Verify this set →* opens it in the Verify tab (phase P4).
+  *Verify this set →* opens it in the Verify tab, against its table alone.
 
 The firmware's set (`main/models/`) is never written here; installing a set is
 the Firmware tab's job (phase P5).
+
+## Verify screen
+
+Scores one model, or compares two, on labelled test folders, with the numbers
+`eval_frames.py` gives (same functions, same C library).
+
+- **Model A** (and, with *Compare with model B*, **Model B**): a model set and
+  one of its stages, or *stage 0 · HSV*, which scores each frame with the
+  settings it was saved with. A set trained for stage 2 holds a copy of its
+  table, so the same set at stage 1 and at stage 2 compares **the table alone
+  with the table plus its classifier**. Train's *Verify this set →* opens
+  exactly that.
+- **Test data**: the same folder tree as Train. Check folders the models were
+  not trained on; when one was, the verdict says its figures are optimistic.
+- **Results**: the comparison's verdict, then A's and B's own (README step 4:
+  every balloon found and no false blob 1 on a frame without a balloon), the
+  figures side by side, and one row per session. From stage 2 up the pixel
+  figures do not change (the classifier removes blobs, not pixels); compare
+  the blob figures. **Cannot conclude** means one figure improves and another
+  gets worse, or the difference is one frame of a small set. *Copy report*
+  copies all of it as text.
+- **Frames**: every frame with its outcome (`ok`, `partial`, `false`,
+  `missed`, `false b1`), A's and B's, filterable (All, Failing, Passing,
+  A ≠ B). The selected frame is drawn with A's or B's result: the stage's mask
+  (yellow), the labelled balloons (dotted cyan), and the reported blobs, green
+  in a balloon and red outside one, numbered as the camera reports them, with
+  the classifier's confidence from stage 2.
 
 ## Protocol (firmware ↔ viewer)
 

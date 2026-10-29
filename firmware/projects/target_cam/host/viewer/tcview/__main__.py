@@ -30,6 +30,7 @@ from .calib_tab import CalibTab
 from .flight_tab import FlightTab
 from .label_tab import LabelTab
 from .train_tab import TrainTab
+from .verify_tab import VerifyTab
 from .link import CLOSE_S, LOST, OPEN_FAILED, REVERT_S, SerialLink, open_error
 from .ui import persist, theme
 from .ui.keys import add_shortcut
@@ -57,11 +58,15 @@ class MainWindow(QMainWindow):
         self.label = LabelTab()
         self.blobs = BlobsTab(self)
         self.train = TrainTab(self)
+        self.verify = VerifyTab(self)
+        self.train.sets_changed.connect(self.verify.reload_sets)
+        self.train.verify_requested.connect(self._verify_set)
         self.tabs.add_page(self.calib, "Image && calibration")
         self.tabs.add_page(self.flight, "Flight data", "what the ESP32-S3 gets")
         self.tabs.add_page(self.label, "Label frames")
         self.tabs.add_page(self.blobs, "Blobs", "classifier data")
         self.tabs.add_page(self.train, "Train", "train stage 1-3 models into models/")
+        self.tabs.add_page(self.verify, "Verify", "score or compare models on test folders")
         self.tabs.currentChanged.connect(self._tab_changed)
         central = QWidget()
         cl = QVBoxLayout(central)
@@ -132,7 +137,8 @@ class MainWindow(QMainWindow):
 
     def _tab_groups(self):
         return (("calib", self.calib), ("flight", self.flight), ("label", self.label),
-                ("blobs", self.blobs), ("train", self.train))
+                ("blobs", self.blobs), ("train", self.train),
+                ("verify", self.verify))
 
     def restore_layout(self):
         """Everything but the window's size and place: main() sets those,
@@ -328,6 +334,13 @@ class MainWindow(QMainWindow):
         if cmd:
             self.entry.remember(cmd)
             self.send(cmd)
+
+    def _verify_set(self, path):
+        """Train's "Verify this set": open it in Verify (table alone vs with
+        its classifier when it has one)."""
+        if path is not None:
+            self.verify.verify(path)
+            self.tabs.setCurrentWidget(self.verify)
 
     def _tab_changed(self, i):
         page = self.tabs.page(i)
