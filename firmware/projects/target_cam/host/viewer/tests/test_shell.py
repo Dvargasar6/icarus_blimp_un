@@ -38,9 +38,10 @@ def pump(app, s=0.2):
 def test_tabs_have_short_names_and_tooltips(win):
     t = win.tabs
     assert [t.tabText(i) for i in range(t.count())] == [
-        "Image && calibration", "Flight data", "Label frames", "Blobs"]
+        "Image && calibration", "Flight data", "Label frames", "Blobs", "Train"]
     assert t.tabToolTip(1) == "what the ESP32-S3 gets" and t.tabToolTip(3) == "classifier data"
-    assert [t.page(i) for i in range(4)] == [win.calib, win.flight, win.label, win.blobs]
+    assert [t.page(i) for i in range(5)] == [win.calib, win.flight, win.label, win.blobs,
+                                             win.train]
     t.setCurrentWidget(win.blobs)
     assert t.current_page() is win.blobs
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -117,8 +118,34 @@ class DataNode:
     n_frames: int = 0       # below it, subfolders included
     n_labelled: int = 0
     own_frames: int = 0     # directly in it
+    gains: Counter = field(default_factory=Counter)     # white balance text -> frames
     children: list = field(default_factory=list)
     blobsets: list = field(default_factory=list)        # .npz paths directly in it
+
+
+def gain_text(cfg: dict) -> str:
+    """'fixed 76,64,75', 'auto', 'frozen' or 'unrecorded': the white balance
+    a frame's pixels were made with (README, White balance). Colour from
+    different gains is not comparable (learned-detector report §10.7, §11)."""
+    wb = cfg.get("wb")
+    if wb is None:
+        return "unrecorded"
+    if wb == "fixed":
+        return "fixed %s" % cfg.get("wb_gain", "?")
+    return str(wb)
+
+
+def frame_gain(json_path: Path) -> str:
+    return gain_text(_json(json_path).get("camera_cfg") or {})
+
+
+def gains_summary(gains: Counter) -> str:
+    """One line for a folder or a selection: the gains, most frames first."""
+    if not gains:
+        return ""
+    if len(gains) == 1:
+        return next(iter(gains))
+    return "MIXED: " + ", ".join("%s (%d)" % kv for kv in gains.most_common())
 
 
 def data_tree(root: Path = DATA_DIR) -> DataNode | None:
@@ -137,10 +164,12 @@ def data_tree(root: Path = DATA_DIR) -> DataNode | None:
                     node.children.append(sub)
                     node.n_frames += sub.n_frames
                     node.n_labelled += sub.n_labelled
+                    node.gains.update(sub.gains)
             elif c.suffix == ".rgb565" and c.with_suffix(".json").exists():
                 node.own_frames += 1
                 node.n_frames += 1
                 node.n_labelled += Path(str(c.with_suffix("")) + LABEL_SUFFIX).exists()
+                node.gains[frame_gain(c.with_suffix(".json"))] += 1
             elif c.suffix == ".npz":
                 node.blobsets.append(c)
         return node

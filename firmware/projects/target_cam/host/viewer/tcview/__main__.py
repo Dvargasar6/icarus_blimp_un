@@ -29,6 +29,7 @@ from .blobs_tab import BlobsTab
 from .calib_tab import CalibTab
 from .flight_tab import FlightTab
 from .label_tab import LabelTab
+from .train_tab import TrainTab
 from .link import CLOSE_S, LOST, OPEN_FAILED, REVERT_S, SerialLink, open_error
 from .ui import persist, theme
 from .ui.keys import add_shortcut
@@ -37,7 +38,7 @@ from .ui.shell import (ConnectionBar, ConsoleDock, PageTabs, StatsBar,
 
 
 class MainWindow(QMainWindow):
-    """The shell (§5) around the four tabs. `port` preselects a port (and
+    """The shell (§5) around the tabs. `port` preselects a port (and
     `fake` lists it as the fake camera); nothing connects until
     connect_link(), which main() calls only for --port or --fake."""
 
@@ -55,10 +56,12 @@ class MainWindow(QMainWindow):
         self.flight = FlightTab(self)
         self.label = LabelTab()
         self.blobs = BlobsTab(self)
+        self.train = TrainTab(self)
         self.tabs.add_page(self.calib, "Image && calibration")
         self.tabs.add_page(self.flight, "Flight data", "what the ESP32-S3 gets")
         self.tabs.add_page(self.label, "Label frames")
         self.tabs.add_page(self.blobs, "Blobs", "classifier data")
+        self.tabs.add_page(self.train, "Train", "train stage 1-3 models into models/")
         self.tabs.currentChanged.connect(self._tab_changed)
         central = QWidget()
         cl = QVBoxLayout(central)
@@ -129,7 +132,7 @@ class MainWindow(QMainWindow):
 
     def _tab_groups(self):
         return (("calib", self.calib), ("flight", self.flight), ("label", self.label),
-                ("blobs", self.blobs))
+                ("blobs", self.blobs), ("train", self.train))
 
     def restore_layout(self):
         """Everything but the window's size and place: main() sets those,

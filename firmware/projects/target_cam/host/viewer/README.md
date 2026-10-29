@@ -200,6 +200,39 @@ worst feature and the size of the difference.
 `host/tools/blobs_from_frames.py DIR... -o out.npz` builds the same dataset
 from labelled frames without the GUI.
 
+## Train screen
+
+Trains the learned stages into a new **model set**, `target_cam/models/<name>/`
+(see `models/README.md`). Stage 0 is not here: it is calibrated by hand on
+Image & calibration. Stage 3 (the crop CNN) is phase P7 and greyed out.
+
+- **Training data** is a tree of `target_cam/data/` (*Open…* for another
+  folder). A checked folder is **one capture session**, with every frame below
+  it, so check `data/train/s3`, not its colour subfolders: holding out one
+  colour of one session is not a held-out session. Checking a folder unchecks
+  the ones above and below it. Folders without labelled frames cannot be
+  checked. Blob sets (`.npz`) can be checked at stage 2 only. The **White
+  balance** column and the line under the tree warn when the checked sessions
+  mix gains: their colours are not comparable.
+- **Stage 1** trains a colour table (`train_lut.py`). **Stage 2** trains a blob
+  classifier behind the **parent model set**'s table (`train_clf.py`): the new
+  set gets a copy of that table plus the classifier, and the parent is not
+  changed.
+- **Parameters**: chosen by leaving one session out (two or more sessions), or
+  fixed. *max balloons lost* (stage 2) excludes settings that lose more than
+  that fraction of stage 1's balloons on held-out frames.
+- **Output**: the set name (empty = the grey suggestion), and the exact
+  command, which can be copied and run by hand from `target_cam/`.
+- **Train** runs the trainer as a separate process, its output below and saved
+  in the set (`train_log.txt`, `clf_train_log.txt`). The banner is read from the
+  `.json` the trainer wrote: red if the chosen setting puts a false blob 1 on a
+  held-out session (do not fly it), amber if it loses balloons or the trainer
+  warned, green otherwise. A failed run leaves no folder behind.
+  *Verify this set →* opens it in the Verify tab (phase P4).
+
+The firmware's set (`main/models/`) is never written here; installing a set is
+the Firmware tab's job (phase P5).
+
 ## Protocol (firmware ↔ viewer)
 
 The text protocol stays readable in a plain terminal and in `target_monitor.py`.
