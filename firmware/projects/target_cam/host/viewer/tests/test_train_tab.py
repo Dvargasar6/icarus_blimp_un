@@ -140,8 +140,11 @@ def test_what_train_needs(dirs):
     assert t.train_btn.isEnabled()
     cmd = t.command(models / "ok_name")
     assert cmd[1].endswith("train_lut.py") and "--sigma" in cmd and cmd[-1] == str(data / "red_s1")
-    # Stage 3 is not built; stage 1 refuses blob sets.
-    assert not t.stage.buttons[3].isEnabled()
+    # Stage 3 needs a parent that runs stage 2: the firmware's set does not.
+    t.stage.set_value(3)
+    assert t.parent_combo.count() == 0 or all(
+        "2" in t.parent_combo.itemText(i) for i in range(t.parent_combo.count()))
+    assert any("parent" in p for p in t.problems())
 
 
 def test_train_a_table_then_a_classifier_behind_it(dirs):
@@ -177,6 +180,25 @@ def test_train_a_table_then_a_classifier_behind_it(dirs):
     assert (models / "clf_ok" / "clf_train_log.txt").exists()
     assert Lib.load_set(models / "table_a").stages == [1]      # parent untouched
     assert "Classifier id" in t.banner.text()
+
+    # A CNN behind that classifier: the set gets the table, the classifier
+    # and the CNN, and offers all three stages.
+    t.stage.set_value(3)
+    i = t.parent_combo.findData(str(models / "clf_ok"))
+    assert i >= 0
+    t.parent_combo.setCurrentIndex(i)
+    t.picker.set_checked([data / "s3"])
+    t.fixed.setChecked(True)
+    t.cnn_epochs.setValue(2)
+    t.name.setText("cnn_ok")
+    cmd = t.command(models / "cnn_ok")
+    assert cmd[1].endswith("train_cnn.py") and "--clf" in cmd and "--threshold" in cmd
+    assert t.train()
+    wait(t)
+    s3 = Lib.load_set(models / "cnn_ok")
+    assert s3 is not None and s3.stages == [1, 2, 3], t.log.toPlainText()[-2000:]
+    assert (models / "cnn_ok" / "cnn_train_log.txt").exists() and "CNN id" in t.banner.text()
+    assert Lib.load_set(models / "clf_ok").stages == [1, 2]     # parent untouched
 
 
 def test_a_failed_run_leaves_no_half_set(dirs, monkeypatch):

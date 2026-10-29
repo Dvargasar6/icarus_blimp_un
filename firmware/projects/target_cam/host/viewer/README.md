@@ -110,7 +110,7 @@ the stage in *Detector stage* (it follows the camera's, and *Set* sends
 | 0 | The HSV window: preset, hue bar, hue, tolerance, min sat, min value, `c`, and the Region section |
 | 1 | The colour table: its id on the PC and on the camera (the HSV settings are kept for stage 0, hidden) |
 | 2 | Also the blob classifier (PC and camera ids, the threshold it runs with) and its **Threshold** control, `!thr2` in hundredths, 0 = the model's own. The PC boxes run at the threshold the control shows |
-| 3 | Also a note: the crop CNN is not built yet (phase P7) |
+| 3 | Also the crop CNN (PC and camera ids, its running threshold), its **Threshold** (`!thr3`) and **Blobs checked** (`!cnnk`) |
 
 To collect data for a stage, run the one below it: blobs for a classifier
 are collected at stage 1 behind the table it will be trained with.
@@ -227,7 +227,7 @@ from labelled frames without the GUI.
 
 Trains the learned stages into a new **model set**, `target_cam/models/<name>/`
 (see `models/README.md`). Stage 0 is not here: it is calibrated by hand on
-Image & calibration. Stage 3 (the crop CNN) is phase P7 and greyed out.
+Image & calibration.
 
 - **Training data** is a tree of `target_cam/data/` (*Open…* for another
   folder). A checked folder is **one capture session**, with every frame below
@@ -240,7 +240,10 @@ Image & calibration. Stage 3 (the crop CNN) is phase P7 and greyed out.
 - **Stage 1** trains a colour table (`train_lut.py`). **Stage 2** trains a blob
   classifier behind the **parent model set**'s table (`train_clf.py`): the new
   set gets a copy of that table plus the classifier, and the parent is not
-  changed.
+  changed. **Stage 3** trains the crop CNN (`train_cnn.py`) behind a parent set
+  that runs stage 2: the new set gets copies of its table and classifier plus
+  the CNN. Its parameters are the input size (16 or 24), the epochs, the blobs
+  checked per frame (`cnn_k`) and, when fixed, the threshold. It takes minutes.
 - **Parameters**: chosen by leaving one session out (two or more sessions), or
   fixed. *max balloons lost* (stage 2) excludes settings that lose more than
   that fraction of stage 1's balloons on held-out frames.

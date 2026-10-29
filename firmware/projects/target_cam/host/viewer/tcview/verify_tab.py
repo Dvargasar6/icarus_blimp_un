@@ -288,10 +288,6 @@ class VerifyTab(QWidget):
         ss = self.picker.sessions()
         if not ss:
             out.append("Check at least one test folder.")
-        for c in [self.pick_a.candidate()] + ([self.pick_b.candidate()]
-                                               if self.compare.isChecked() else []):
-            if c is not None and c.stage >= 3:
-                out.append("Stage 3 is not built yet.")
         return out
 
     def _refresh(self, *_):

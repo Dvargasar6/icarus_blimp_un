@@ -135,12 +135,12 @@ static void test_stage_rule(void)
     static const int dummy;                         /* any non-NULL pointer */
     const void *P = &dummy;
     struct { tc_models_t m; int avail; const char *name; } cases[] = {
-        { { NULL, NULL, NULL }, 0, "no models"                         },
-        { { P,    NULL, NULL }, 1, "table only"                        },
-        { { P,    P,    NULL }, 2, "table + classifier"                },
-        { { P,    P,    P    }, 3, "all three"                         },
-        { { NULL, P,    P    }, 0, "classifier + CNN, no table"        },
-        { { P,    NULL, P    }, 1, "table + CNN, no classifier"        },
+        { { NULL, NULL, NULL, 0 }, 0, "no models"                         },
+        { { P   , NULL, NULL, 0 }, 1, "table only"                        },
+        { { P   , P   , NULL, 0 }, 2, "table + classifier"                },
+        { { P   , P   , P   , 0 }, 3, "all three"                         },
+        { { NULL, P   , P   , 0 }, 0, "classifier + CNN, no table"        },
+        { { P   , NULL, P   , 0 }, 1, "table + CNN, no classifier"        },
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         int got = tc_stage_available(&cases[i].m);
@@ -160,7 +160,7 @@ static void test_stage0_is_blob_detect(void)
 {
     printf("3. pipeline at stage 0 == blob_detect, bit for bit (40 scenes)\n");
     blob_cfg_t c = red_cfg();
-    tc_models_t none = { NULL, NULL, NULL };
+    tc_models_t none = { NULL, NULL, NULL, 0 };
     int same = 0, found = 0;
     for (int i = 0; i < 40; i++) {
         scene(i % 6);
@@ -188,7 +188,7 @@ static void test_timing(void)
 {
     printf("4. stage times with a clock\n");
     blob_cfg_t c = red_cfg();
-    tc_models_t none = { NULL, NULL, NULL };
+    tc_models_t none = { NULL, NULL, NULL, 0 };
     scene(3);
     tc_result_t t;
     s_ticks = 0;
@@ -211,7 +211,7 @@ static void test_features_flag(void)
 {
     printf("7. TC_RUN_FEATURES: features for every reported blob, detection unchanged\n");
     blob_cfg_t c = red_cfg();
-    tc_models_t none = { NULL, NULL, NULL };
+    tc_models_t none = { NULL, NULL, NULL, 0 };
     int same = 0, nblobs = 0;
     for (int i = 0; i < 30; i++) {
         scene(i % 5);
@@ -266,7 +266,7 @@ static void test_hsv_table_is_stage0(void)
     for (int ci = 0; ci < 4; ci++) {
         blob_cfg_t c = cfgs[ci];
         color_lut_from_hsv(&c, lut);
-        tc_models_t m = { lut, NULL, NULL };
+        tc_models_t m = { lut, NULL, NULL, 0 };
         if (ci == 0)
             printf("   red preset as a table: %d of 65536 colours\n", color_lut_count(lut));
         for (int i = 0; i < 25; i++) {
@@ -291,7 +291,7 @@ static void test_hsv_table_is_stage0(void)
        nothing where stage 0 sees the discs. */
     blob_cfg_t c = red_cfg();
     memset(lut, 0, sizeof lut);
-    tc_models_t m = { lut, NULL, NULL };
+    tc_models_t m = { lut, NULL, NULL, 0 };
     scene(3);
     tc_result_t t0, t1;
     tc_pipeline_run(&c, 0, 0, &m, frame, work_buf, NULL, &t0);
@@ -498,7 +498,7 @@ static void test_stage2(void)
     memset(&clf, 0, sizeof clf);
     for (int i = 0; i < BLOB_FEAT_N; i++) clf.scale[i] = 1.0f;
     clf.threshold = 0.5f;
-    tc_models_t m = { lut, &clf, NULL };
+    tc_models_t m = { lut, &clf, NULL, 0 };
     const int la = feat_index("log_area");
     check(la >= 0, "no log_area feature");
 

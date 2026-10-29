@@ -68,9 +68,9 @@ class Candidate:
         if self.stage not in s.stages:
             raise D.ModelError("%s cannot run stage %d (it offers %s)"
                                % (s.name, self.stage, s.stages or "nothing"))
-        if self.stage >= 3:
-            raise D.ModelError("stage 3 is not built yet (phase P7)")
-        return D.models(s.bin("lut"), s.bin("clf") if self.stage >= 2 else None)
+        return D.models(s.bin("lut"), s.bin("clf") if self.stage >= 2 else None,
+                        s.bin("cnn") if self.stage >= 3 else None,
+                        cnn_k=int(s.meta.get("cnn", {}).get("cnn_k", 2)))
 
     def trained_on(self) -> list[tuple[str, list, list]]:
         """(kind, folders, names) of every model this candidate runs. Models

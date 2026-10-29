@@ -29,13 +29,17 @@ SOURCES = [MAIN_DIR / n for n in ("blob_detect.c", "blob_detect.h",
                                    "tc_pipeline.c", "tc_pipeline.h",
                                    "color_lut.c", "color_lut.h",
                                    "blob_feat.c", "blob_feat.h",
-                                   "blob_clf.c", "blob_clf.h")]
+                                   "blob_clf.c", "blob_clf.h",
+                                   "blob_cnn.c", "blob_cnn.h")]
 # The colour table the firmware compiles in (main/models/lut_model.h holds the
 # same bytes; a host test checks they agree).
 LUT_MODEL = MAIN_DIR / "models" / "lut_model.bin"
 # The blob classifier (stage 2), when one is installed. It belongs to one
 # colour table (blob_clf.h), so it is offered only behind that table.
 CLF_MODEL = MAIN_DIR / "models" / "clf_model.bin"
+# The crop CNN (stage 3), when one is installed: behind the same table.
+CNN_MODEL = MAIN_DIR / "models" / "cnn_model.bin"
+CNN_MAX_C = 16
 COLOR_LUT_BYTES = 8192
 MODEL_ERRORS = ["ok", "short", "magic", "version", "size", "crc", "value"]
 
@@ -71,7 +75,8 @@ class TcModels(C.Structure):
     they point into are kept on the instance (_keep), so they live exactly as
     long as the models do. lut_id is the table's train id, 0 when absent;
     clf_id and clf_path the same for the classifier."""
-    _fields_ = [("lut", C.c_void_p), ("clf", C.c_void_p), ("cnn", C.c_void_p)]
+    _fields_ = [("lut", C.c_void_p), ("clf", C.c_void_p), ("cnn", C.c_void_p),
+                ("cnn_k", C.c_int)]
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
@@ -81,6 +86,9 @@ class TcModels(C.Structure):
         self.clf_id = 0
         self.clf_path = None
         self.clf_model = None
+        self.cnn_id = 0
+        self.cnn_path = None
+        self.cnn_model = None
 
 
 class BlobClf(C.Structure):
@@ -98,10 +106,23 @@ class CropBox(C.Structure):
     _fields_ = [("xs", C.c_int), ("ys", C.c_int), ("side", C.c_int)]
 
 
+class BlobCnnConv(C.Structure):
+    _fields_ = [("cin", C.c_int), ("cout", C.c_int), ("w", C.c_int8 * (CNN_MAX_C * CNN_MAX_C * 9)),
+                ("bias", C.c_int32 * CNN_MAX_C), ("mult", C.c_int32), ("shift", C.c_int)]
+
+
+class BlobCnn(C.Structure):
+    """blob_cnn_t (blob_cnn.h); its size is checked against the library's."""
+    _fields_ = [("lut_id", C.c_uint32), ("threshold", C.c_float), ("logit_scale", C.c_float),
+                ("n", C.c_int), ("conv", BlobCnnConv * 3), ("dense_w", C.c_int8 * CNN_MAX_C),
+                ("dense_bias", C.c_int32)]
+
+
 class TcResult(C.Structure):
     _fields_ = [("r", BlobResult), ("stage", C.c_int),
                 ("conf", C.c_float * BLOB_MAX_REPORT),
                 ("t_px_us", C.c_int32), ("t_b_us", C.c_int32), ("t_c_us", C.c_int32),
+                ("n_cnn", C.c_int), ("n_rejected3", C.c_int),
                 ("t_total_us", C.c_int32), ("n_feat", C.c_int),
                 ("feat", BlobFeat * BLOB_MAX_REPORT), ("n_rejected", C.c_int)]
 
@@ -176,6 +197,17 @@ def load_library() -> C.CDLL:
     lib.blob_clf_conf.argtypes = [P(BlobClf), P(BlobFeat)]
     lib.blob_clf_conf.restype = C.c_float
     lib.blob_clf_struct_bytes.restype = C.c_size_t
+    lib.blob_cnn_load.argtypes = [C.c_char_p, C.c_size_t, P(BlobCnn), P(C.c_uint32)]
+    lib.blob_cnn_sum.argtypes = [P(BlobCnn), C.c_void_p]
+    lib.blob_cnn_sum.restype = C.c_int32
+    lib.blob_cnn_conf.argtypes = [P(BlobCnn), C.c_void_p]
+    lib.blob_cnn_conf.restype = C.c_float
+    lib.blob_cnn_macs.argtypes = [P(BlobCnn)]
+    lib.blob_cnn_macs.restype = C.c_long
+    lib.blob_cnn_struct_bytes.restype = C.c_size_t
+    if lib.blob_cnn_struct_bytes() != C.sizeof(BlobCnn):
+        raise RuntimeError("blob_cnn_t is %d bytes in the library, %d here"
+                           % (lib.blob_cnn_struct_bytes(), C.sizeof(BlobCnn)))
     if lib.blob_clf_struct_bytes() != C.sizeof(BlobClf):
         raise RuntimeError("blob_clf_t is %d bytes in the library, %d here"
                            % (lib.blob_clf_struct_bytes(), C.sizeof(BlobClf)))
@@ -335,28 +367,97 @@ def add_clf(m: TcModels, record: bytes, path=None, strict: bool = True) -> TcMod
     return m
 
 
-def with_threshold(m: TcModels, threshold: float | None) -> TcModels:
-    """m with its classifier run at `threshold` (the camera's !thr2), as
-    target_main.c apply_thr2() does; m itself when there is no classifier or
-    no threshold to apply. The table is shared, the classifier copied."""
-    if not m.clf or threshold is None or threshold <= 0 or \
-            abs(threshold - m.clf_model.threshold) < 1e-6:
+def load_cnn(record: bytes) -> tuple[BlobCnn, int]:
+    """(model, train id) from a CNN record, checked by the C blob_cnn_load
+    exactly as the camera checks it at boot."""
+    out = BlobCnn()
+    tid = C.c_uint32()
+    e = lib().blob_cnn_load(record, len(record), C.byref(out), C.byref(tid))
+    if e != 0:
+        raise ModelError("crop CNN refused: %s" % MODEL_ERRORS[e])
+    return out, tid.value
+
+
+def add_cnn(m: TcModels, record: bytes, path=None, strict: bool = True,
+            cnn_k: int = 2) -> TcModels:
+    """Offer a CNN behind m's table (and classifier: stage 3 needs both).
+    One trained behind another table is refused when strict, else left out."""
+    cnn, tid = load_cnn(record)
+    if not m.lut or cnn.lut_id != m.lut_id:
+        if strict:
+            raise ModelError("crop CNN %d was trained behind colour table %d, not %d"
+                             % (tid, cnn.lut_id, m.lut_id))
+        return m
+    m.cnn = C.cast(C.pointer(cnn), C.c_void_p)
+    m.cnn_k = cnn_k
+    m._keep.append(cnn)
+    m.cnn_model, m.cnn_id, m.cnn_path = cnn, tid, path
+    return m
+
+
+def _rgb565(chw: np.ndarray) -> np.ndarray:
+    """(3, n, n) 8-bit channels made by bit replication -> (n, n) RGB565: the
+    replication is undone exactly by dropping the low bits."""
+    r, g, b = (chw[0].astype(np.uint16) >> 3, chw[1].astype(np.uint16) >> 2,
+               chw[2].astype(np.uint16) >> 3)
+    return np.ascontiguousarray((r << 11) | (g << 5) | b, dtype=np.uint16)
+
+
+def cnn_sum(cnn: BlobCnn, crop) -> int:
+    """blob_cnn_sum() for one crop: (n, n) RGB565 values, or (3, n, n) 8-bit
+    channels (train_cnn.py's form)."""
+    c = np.asarray(crop)
+    c = _rgb565(c) if c.ndim == 3 else np.ascontiguousarray(c, dtype=np.uint16)
+    return int(lib().blob_cnn_sum(C.byref(cnn), c.ctypes.data_as(C.c_void_p)))
+
+
+def cnn_conf(cnn: BlobCnn, crop) -> float:
+    c = np.asarray(crop)
+    c = _rgb565(c) if c.ndim == 3 else np.ascontiguousarray(c, dtype=np.uint16)
+    return float(lib().blob_cnn_conf(C.byref(cnn), c.ctypes.data_as(C.c_void_p)))
+
+
+def cnn_macs(cnn: BlobCnn) -> int:
+    return int(lib().blob_cnn_macs(C.byref(cnn)))
+
+
+def with_threshold(m: TcModels, threshold: float | None,
+                   cnn_threshold: float | None = None, cnn_k: int | None = None) -> TcModels:
+    """m with its classifier run at `threshold` (the camera's !thr2) and its
+    CNN at `cnn_threshold` (!thr3), as target_main.c apply_thr2/3() do; m
+    itself when there is nothing to change. Tables shared, models copied."""
+    clf_change = bool(m.clf) and threshold is not None and threshold > 0 and \
+        abs(threshold - m.clf_model.threshold) >= 1e-6
+    cnn_change = bool(m.cnn) and cnn_threshold is not None and cnn_threshold > 0 and \
+        abs(cnn_threshold - m.cnn_model.threshold) >= 1e-6
+    k_change = bool(m.cnn) and cnn_k is not None and cnn_k != m.cnn_k
+    if not clf_change and not cnn_change and not k_change:
         return m
     out = TcModels()
     out.lut, out.lut_id, out.lut_path = m.lut, m.lut_id, m.lut_path
+    out.cnn, out.cnn_k, out.cnn_id, out.cnn_path, out.cnn_model = (
+        m.cnn, cnn_k if k_change else m.cnn_k, m.cnn_id, m.cnn_path, m.cnn_model)
+    out.clf, out.clf_model, out.clf_id, out.clf_path = m.clf, m.clf_model, m.clf_id, m.clf_path
     out._keep = list(m._keep)
-    clf = BlobClf.from_buffer_copy(m.clf_model)
-    clf.threshold = float(threshold)
-    out.clf = C.cast(C.pointer(clf), C.c_void_p)
-    out._keep.append(clf)
-    out.clf_model, out.clf_id, out.clf_path = clf, m.clf_id, m.clf_path
+    if clf_change:
+        clf = BlobClf.from_buffer_copy(m.clf_model)
+        clf.threshold = float(threshold)
+        out.clf = C.cast(C.pointer(clf), C.c_void_p)
+        out._keep.append(clf)
+        out.clf_model = clf
+    if cnn_change:
+        cnn = BlobCnn.from_buffer_copy(m.cnn_model)
+        cnn.threshold = float(cnn_threshold)
+        out.cnn = C.cast(C.pointer(cnn), C.c_void_p)
+        out._keep.append(cnn)
+        out.cnn_model = cnn
     return out
 
 
 _MODELS = None
 
 
-def models(lut_path=None, clf_path=None) -> TcModels:
+def models(lut_path=None, clf_path=None, cnn_path=None, cnn_k: int = 2) -> TcModels:
     """The models the firmware compiles in, or the table at lut_path (and the
     classifier at clf_path, which must belong to that table). With no table
     file, no models: every request then falls back to stage 0, as the camera
@@ -368,8 +469,10 @@ def models(lut_path=None, clf_path=None) -> TcModels:
         m = lut_models(record=p.read_bytes(), path=p)
         if clf_path is not None:
             add_clf(m, Path(clf_path).read_bytes(), Path(clf_path))
+        if cnn_path is not None:
+            add_cnn(m, Path(cnn_path).read_bytes(), Path(cnn_path), cnn_k=cnn_k)
         return m
-    if clf_path is not None:
+    if clf_path is not None or cnn_path is not None:
         raise ValueError("a classifier needs the colour table it belongs to (lut_path)")
     if _MODELS is None:
         m = lut_models(record=LUT_MODEL.read_bytes(), path=LUT_MODEL) \
@@ -379,6 +482,11 @@ def models(lut_path=None, clf_path=None) -> TcModels:
                 add_clf(m, CLF_MODEL.read_bytes(), CLF_MODEL, strict=False)
             except ModelError:
                 pass                        # refused: the camera runs stage 1 too
+        if m.lut and CNN_MODEL.exists():
+            try:
+                add_cnn(m, CNN_MODEL.read_bytes(), CNN_MODEL, strict=False)
+            except ModelError:
+                pass
         _MODELS = m
     return _MODELS
 

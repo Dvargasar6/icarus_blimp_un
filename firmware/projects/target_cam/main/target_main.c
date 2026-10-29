@@ -49,9 +49,11 @@
 #include "blob_detect.h"
 #include "color_lut.h"
 #include "blob_clf.h"
+#include "blob_cnn.h"
 #include "tc_pipeline.h"
 #include "models/lut_model.h"
 #include "models/clf_model.h"
+#include "models/cnn_model.h"
 #include "link.h"
 #include "settings.h"
 
@@ -219,6 +221,31 @@ static float clf_threshold(void)
     return -1.0f;
 }
 static const char *s_cnn_state = "none";
+static uint32_t    s_cnn_id;          /* its train id; #!CFG cnn_id=          */
+/* The CNN as the record holds it, and as it runs ('!thr3'). Static: about
+   5 kB each, and blob_cnn_load() wants somewhere to put the network. */
+#ifndef CNN_MODEL_NONE
+static blob_cnn_t  s_cnn_rec;
+static blob_cnn_t  s_cnn;
+#endif
+static int         s_thr3;            /* '!thr3': hundredths, 0 = the model's */
+
+static void apply_thr3(void)
+{
+#ifndef CNN_MODEL_NONE
+    s_cnn = s_cnn_rec;
+    if (s_thr3 > 0) s_cnn.threshold = (float)s_thr3 / 100.0f;
+#endif
+}
+
+/* The threshold stage 3 runs with, or -1 with no CNN running. */
+static float cnn_threshold(void)
+{
+#ifndef CNN_MODEL_NONE
+    if (s_models.cnn != NULL) return s_cnn.threshold;
+#endif
+    return -1.0f;
+}
 
 /* Busy time of the previous loop iteration, from waking up to the end of its
    CSV row. The row cannot carry its own (the print is part of it), so each row
@@ -516,6 +543,9 @@ static void live_defaults(void)
     s_cnn_k          = 2;
     s_thr2           = 0;
     apply_thr2();
+    s_thr3           = 0;
+    apply_thr3();
+    s_models.cnn_k   = s_cnn_k;
     set_flip(false);
     blob_preset_apply(&s_cfg, s_preset);
     /* Before the camera starts there is no sensor yet; set_wb() then only
@@ -545,6 +575,7 @@ static tc_settings_t live_capture(void)
     t.cnn_k      = (int8_t)s_cnn_k;
     t.flip       = s_flip ? 1 : 0;
     t.thr2       = (uint8_t)s_thr2;
+    t.thr3       = (uint8_t)s_thr3;
     memcpy(t.wb_gain, s_wb_gain, sizeof t.wb_gain);
     return t;
 }
@@ -566,7 +597,7 @@ static bool live_apply(const tc_settings_t *t)
         t->preset < -1 || t->preset >= BLOB_PRESET_COUNT ||
         t->stage < 0 || t->stage > TC_STAGE_MAX ||
         t->cnn_k < 1 || t->cnn_k > BLOB_MAX_REPORT ||
-        (t->flip != 0 && t->flip != 1) || t->thr2 > 99) {
+        (t->flip != 0 && t->flip != 1) || t->thr2 > 99 || t->thr3 > 99) {
         return false;
     }
     s_cfg.hue        = t->hue;
@@ -581,8 +612,11 @@ static bool live_apply(const tc_settings_t *t)
     s_preset         = t->preset;
     s_stage_req      = t->stage;
     s_cnn_k          = t->cnn_k;
+    s_models.cnn_k   = s_cnn_k;
     s_thr2           = t->thr2;
     apply_thr2();
+    s_thr3           = t->thr3;
+    apply_thr3();
     /* Keep the preset's name only if its numbers still match: a firmware
        update may have retuned the preset since this record was saved. */
     if (s_preset >= 0) {
@@ -624,7 +658,7 @@ static void print_cfg(void)
            "fov=%.1f fps=%.3g period_ms=%.1f sensor_us=%.0f awb=%d wb=%s "
            "wb_gain=%d,%d,%d wb_fixed=%d,%d,%d be=%d preset=%s baud=%d image=%d stream=%d settings=%s stage=%d stage_eff=%d lut=%s lut_id=%u "
            "clf=%s cnn=%s cnn_k=%d csv=%d fw=%s collect=%d fv=%d flip=%d clf_id=%u "
-           "thr2=%d clf_thr=%.2f\n",
+           "thr2=%d clf_thr=%.2f cnn_id=%u thr3=%d cnn_thr=%.2f\n",
            FRAME_W, FRAME_H, s_cfg.cell, s_cfg.hue, s_cfg.hue_tol, s_cfg.sat_min,
            s_cfg.val_min, s_cfg.min_area, s_target_mm, s_hfov_deg, frame_fps(),
            period_ms(), s_sensor_us, s_wb, wb_name(s_wb), g[0], g[1], g[2],
@@ -634,7 +668,8 @@ static void print_cfg(void)
            s_stage_req, tc_stage_effective(s_stage_req, &s_models),
            s_lut_state, (unsigned)s_lut_id, s_clf_state, s_cnn_state, s_cnn_k, CSV_VERSION,
            esp_app_get_description()->version, s_collect ? 1 : 0, BLOB_FEAT_VERSION,
-           s_flip ? 1 : 0, (unsigned)s_clf_id, s_thr2, (double)clf_threshold());
+           s_flip ? 1 : 0, (unsigned)s_clf_id, s_thr2, (double)clf_threshold(),
+           (unsigned)s_cnn_id, s_thr3, (double)cnn_threshold());
 }
 
 /* ------------------------------------------------------------------ */
@@ -691,6 +726,8 @@ static void print_banner(void)
     printf("#              !stage <0-3> detector level | "
            "!collect <0|1> blob records for training | !flip <0|1> image 180 deg\n");
     printf("#              !thr2 <0-99> classifier threshold, hundredths (0 = the model's)\n");
+    printf("#              !thr3 <0-99> CNN threshold | !cnnk <1-4> blobs the CNN checks | "
+           "!cnnbench [16|24] time the CNN\n");
     printf("# columns      t_ms,ok,cx_px,cy_px,az_deg,el_deg,area_px,w_px,h_px,"
            "fill,range_mm,clipped,blobs,matched_px,b2_az,b2_el,b2_range_mm,"
            "b3_az,b3_el,b3_range_mm,b4_az,b4_el,b4_range_mm,dt_ms,proc_us,"
@@ -771,7 +808,8 @@ static cmd_res_t run_store_command(const char *line)
         printf("# saved settings erased; running the Kconfig defaults\n");
         return CMD_OK;
     }
-    snprintf(s_why, sizeof s_why, "unknown (!save !load !reset !stage !collect !flip !thr2)");
+    /* s_why is 64 bytes: the full list is in the banner ('?'). */
+    snprintf(s_why, sizeof s_why, "unknown '!' command ('?' lists them)");
     return CMD_NAK;
 }
 
@@ -823,6 +861,99 @@ static cmd_res_t run_thr2_command(const char *line)
         printf("# classifier threshold %.2f (%s)\n", (double)clf_threshold(),
                v ? "set by !thr2" : "the model's own");
     }
+    return CMD_OK;
+}
+
+/* '!thr3 N', 0..99: the CNN's threshold, as !thr2 is the classifier's. */
+static cmd_res_t run_thr3_command(const char *line)
+{
+    int v;
+    if (line[5] != ' ' || !arg_in(line + 6, 0, 99, &v)) {
+        snprintf(s_why, sizeof s_why, "usage: !thr3 <0-99> (hundredths; 0 = the model's own)");
+        return CMD_NAK;
+    }
+    s_thr3 = v;
+    apply_thr3();
+    if (s_models.cnn == NULL) {
+        printf("# thr3 %d kept, but no CNN is running (cnn=%s): no effect now\n",
+               v, s_cnn_state);
+    } else {
+        printf("# CNN threshold %.2f (%s)\n", (double)cnn_threshold(),
+               v ? "set by !thr3" : "the model's own");
+    }
+    return CMD_OK;
+}
+
+/* '!cnnk N', 1..4: how many of the blobs stage 2 kept the CNN checks, the
+   largest first. Each costs a crop's worth of multiply-adds (!cnnbench); the
+   ones past N are reported with stage 2's verdict. A whole word: it changes
+   which blobs are verified in flight. */
+static cmd_res_t run_cnnk_command(const char *line)
+{
+    int v;
+    if (line[5] != ' ' || !arg_in(line + 6, 1, BLOB_MAX_REPORT, &v)) {
+        snprintf(s_why, sizeof s_why, "usage: !cnnk <1-%d>", BLOB_MAX_REPORT);
+        return CMD_NAK;
+    }
+    s_cnn_k = v;
+    s_models.cnn_k = v;
+    printf("# the CNN checks the %d largest blob(s) stage 2 keeps\n", v);
+    return CMD_OK;
+}
+
+/* '!cnnbench [16|24]': phase C0's measurement, on the board. Runs the CNN on
+   a fixed synthetic crop 20 times and prints the time per crop and the
+   cycles per multiply-add, so the input size and cnn_k can be chosen from a
+   measured cost instead of the 4-10 cycles estimate (feasibility report).
+   With a CNN built in it times that one (the argument must match its input
+   size, or is left out); without one, a network of the default shape (8, 16,
+   16 channels) with zero weights, whose cost is the same, since the loops do
+   not depend on the values. It stalls the loop for 20 crops (~0.1-0.4 s):
+   a bench command, one late row. */
+static cmd_res_t run_cnnbench_command(const char *line)
+{
+    int n = 0;
+    if (line[9] == ' ' && !arg_in(line + 10, 16, 24, &n)) n = -1;
+    if (line[9] != ' ' && line[9] != '\0') n = -1;
+    if (n != 0 && n != 16 && n != 24) {
+        snprintf(s_why, sizeof s_why, "usage: !cnnbench [16|24]");
+        return CMD_NAK;
+    }
+    static blob_cnn_t dummy;
+    const blob_cnn_t *net = NULL;
+#ifndef CNN_MODEL_NONE
+    if (s_models.cnn != NULL && (n == 0 || n == s_cnn.n)) net = &s_cnn;
+#endif
+    if (net == NULL) {
+        static const int ch[3] = { 8, 16, 16 };
+        memset(&dummy, 0, sizeof dummy);
+        dummy.n = n ? n : 16;
+        dummy.threshold = 0.5f;
+        dummy.logit_scale = 1.0f;
+        int cin = 3;
+        for (int l = 0; l < 3; l++) {
+            dummy.conv[l].cin = cin;
+            dummy.conv[l].cout = ch[l];
+            dummy.conv[l].mult = 1;
+            dummy.conv[l].shift = 1;
+            cin = ch[l];
+        }
+        net = &dummy;
+    }
+    static uint16_t crop[24 * 24];
+    for (int i = 0; i < net->n * net->n; i++) crop[i] = (uint16_t)(i * 2654435761u >> 16);
+    const int reps = 20;
+    volatile float sink = 0;
+    int64_t t0 = esp_timer_get_time();
+    for (int r = 0; r < reps; r++) sink += blob_cnn_conf(net, crop);
+    int64_t us = esp_timer_get_time() - t0;
+    (void)sink;
+    double per = (double)us / reps;
+    long macs = blob_cnn_macs(net);
+    printf("#!CNNBENCH n=%d channels=%d,%d,%d macs=%ld us_per_crop=%.0f cycles_per_mac=%.2f "
+           "model=%s\n", net->n, net->conv[0].cout, net->conv[1].cout, net->conv[2].cout,
+           macs, per, per * CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ / (double)macs,
+           net == &dummy ? "dummy" : "built-in");
     return CMD_OK;
 }
 
@@ -937,6 +1068,15 @@ static cmd_res_t run_command(const char *line)
         }
         if (strncmp(line, "!thr2", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
             return run_thr2_command(line);
+        }
+        if (strncmp(line, "!thr3", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+            return run_thr3_command(line);
+        }
+        if (strncmp(line, "!cnnk", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+            return run_cnnk_command(line);
+        }
+        if (strncmp(line, "!cnnbench", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) {
+            return run_cnnbench_command(line);
         }
         return run_store_command(line);
     case 'c':
@@ -1460,6 +1600,32 @@ static void load_models(void)
                (unsigned)id, (double)s_clf_rec.threshold, (unsigned)s_clf_rec.lut_id);
     }
 #endif
+#ifdef CNN_MODEL_NONE
+    printf("# models        no crop CNN built in: stage 3 unavailable\n");
+#else
+    e = blob_cnn_load(cnn_model_rec, sizeof cnn_model_rec, &s_cnn_rec, &id);
+    s_cnn = s_cnn_rec;
+    if (e != TC_MODEL_OK) {
+        s_cnn_state = "bad";
+        printf("# models        crop CNN REFUSED (%s): stage 3 unavailable\n",
+               tc_model_err_str(e));
+    } else if (s_models.lut == NULL || s_cnn_rec.lut_id != s_lut_id) {
+        s_cnn_state = "mismatch";
+        s_cnn_id = id;
+        printf("# models        crop CNN id %u was trained behind colour table %u, not this "
+               "one (%s %u): stage 3 unavailable\n", (unsigned)id,
+               (unsigned)s_cnn_rec.lut_id, s_lut_state, (unsigned)s_lut_id);
+    } else {
+        s_models.cnn = &s_cnn;
+        apply_thr3();
+        s_cnn_state = "ok";
+        s_cnn_id = id;
+        printf("# models        crop CNN ok: id %u, %dx%d input, %ld multiply-adds per crop, "
+               "threshold %.3f\n", (unsigned)id, s_cnn_rec.n, s_cnn_rec.n,
+               blob_cnn_macs(&s_cnn_rec), (double)s_cnn_rec.threshold);
+    }
+#endif
+    s_models.cnn_k = s_cnn_k;
     fflush(stdout);
 }
 

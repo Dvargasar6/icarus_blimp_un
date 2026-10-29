@@ -290,3 +290,28 @@ def test_fake_camera_takes_thr2():
     assert res == "nak" and "0-99" in why and cam.cfg["thr2"] == 40
     cam._print_cfg()
     assert " thr2=40 " in out[-1] and "clf_thr=" in out[-1]
+
+
+def test_cnn_controls(app, win, monkeypatch):
+    cal = win.calib
+    sent = []
+    monkeypatch.setattr(win, "send", lambda c: sent.append(c) or True)
+    cal.on_cfg(cfg(stage=3, stage_eff=3, clf="ok", cnn="ok", cnn_id=9, thr3=70, cnn_thr=0.7,
+                   cnn_k=3))
+    assert cal.cnn_info.isVisibleTo(cal) and "Crop CNN (stage 3)" in cal.cnn_lbl.text()
+    assert cal.p["thr3"].local == 70 and cal.p["cnnk"].local == 3
+    assert "running threshold 0.70" in cal.cnn_lbl.text()
+    cal.p["thr3"].set_local(55, send=True)
+    cal.p["cnnk"].set_local(1, send=True)
+    assert sent[-2:] == ["!thr3 55", "!cnnk 1"]
+
+
+def test_fake_camera_takes_thr3_and_cnnk():
+    from tcview.fake_cam import FakeCamera
+    cam = FakeCamera()
+    out = []
+    cam._print = out.append
+    assert cam._command("!thr3 30")[0] == "ok" and cam._command("!cnnk 3")[0] == "ok"
+    assert cam._command("!cnnk 5")[0] == "nak"
+    cam._print_cfg()
+    assert " thr3=30 " in out[-1] and " cnn_k=3 " in out[-1] and "cnn_thr=" in out[-1]

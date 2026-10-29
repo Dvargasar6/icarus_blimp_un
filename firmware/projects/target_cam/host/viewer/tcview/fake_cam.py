@@ -32,7 +32,7 @@ W, H = 160, 120
 SENSOR_US = 1599360.0 / 20
 COLLECT_EVERY = 4       # target_main.c: records on every 4th frame
 DEFAULT = dict(hue=0, tol=12, sat=110, val=50, area=25, mm=550, fov=54.0,
-               every=1, awb=1, be=1, preset="red", stage=0, cnn_k=2, flip=0, thr2=0,
+               every=1, awb=1, be=1, preset="red", stage=0, cnn_k=2, flip=0, thr2=0, thr3=0,
                wb_fixed=(64, 64, 64))
 WB_NAMES = {0: "frozen", 1: "auto", 2: "fixed"}     # target_main.c wb_name()
 
@@ -138,17 +138,25 @@ class FakeCamera:
                     "fov=%.1f fps=%.3g period_ms=%.1f sensor_us=%.0f awb=%d wb=%s "
                     "wb_gain=%d,%d,%d wb_fixed=%d,%d,%d be=%d preset=%s baud=%d "
                     "image=%d stream=%d settings=%s stage=%d stage_eff=%d lut=%s lut_id=%d "
-                    "clf=%s cnn=none cnn_k=%d csv=%d fw=fake collect=%d fv=%d flip=%d "
-                    "clf_id=%d thr2=%d clf_thr=%.2f\n"
+                    "clf=%s cnn=%s cnn_k=%d csv=%d fw=fake collect=%d fv=%d flip=%d "
+                    "clf_id=%d thr2=%d clf_thr=%.2f cnn_id=%d thr3=%d cnn_thr=%.2f\n"
                     % (W, H, c["hue"], c["tol"], c["sat"], c["val"], c["area"], c["mm"],
                        c["fov"], 1000.0 / self._period_ms(), self._period_ms(), SENSOR_US,
                        c["awb"], WB_NAMES[c["awb"]], *self._wb_gain(), *c["wb_fixed"],
                        c["be"], c["preset"], self.baud, int(self.image),
                        int(self.stream), self._settings_state(), c["stage"],
                        self._stage_eff(), "ok" if D.models().lut else "none",
-                       D.models().lut_id, "ok" if D.models().clf else "none", c["cnn_k"],
+                       D.models().lut_id, "ok" if D.models().clf else "none",
+                       "ok" if D.models().cnn else "none", c["cnn_k"],
                        CSV_VERSION, int(self.collect), FEAT_VERSION, c["flip"],
-                       D.models().clf_id, c["thr2"], self._clf_thr()))
+                       D.models().clf_id, c["thr2"], self._clf_thr(), D.models().cnn_id,
+                       c["thr3"], self._cnn_thr()))
+
+    def _cnn_thr(self) -> float:
+        m = D.models()
+        if not m.cnn:
+            return -1.0
+        return c / 100.0 if (c := self.cfg["thr3"]) else m.cnn_model.threshold
 
     def _clf_thr(self) -> float:
         """target_main.c clf_threshold(): -1 with no classifier running."""
@@ -225,8 +233,16 @@ class FakeCamera:
                 err = "usage: !thr2 <0-99> (hundredths; 0 = the model's own)"
             else:
                 self.cfg["thr2"] = int(a)
+        elif line.split(" ")[0] in ("!thr3", "!cnnk"):
+            word = line.split(" ")[0]
+            a = line[6:] if line[5:6] == " " else ""
+            lo, hi = (0, 99) if word == "!thr3" else (1, D.BLOB_MAX_REPORT)
+            if not (a.strip().isdigit() and lo <= int(a) <= hi):
+                err = "usage: %s <%d-%d>" % (word, lo, hi)
+            else:
+                self.cfg["thr3" if word == "!thr3" else "cnn_k"] = int(a)
         elif c == "!":
-            err = "unknown (!save !load !reset !stage !collect !flip !thr2)"
+            err = "unknown '!' command ('?' lists them)"
         elif c == "H":
             err = self._set_int("hue", arg, 0, 359, True)
         elif c == "T":

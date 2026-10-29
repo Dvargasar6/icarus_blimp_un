@@ -175,7 +175,8 @@ build default of 80 ms, and the banner says so. A v2 record (before the
 learned detector) loads with stage 0 and `cnn_k` 2, and a v3 record (before
 `!flip`) loads with the image not turned. A v5 record loads as it is: its
 spare byte, zero, is v6's `thr2`, and 0 means the model's own classifier
-threshold. `!save` writes the current version, v6.
+threshold. A v5 or v6 record is the first 32 B of a v7 one and gains `thr3`
+0, the CNN's own threshold. `!save` writes the current version, v7.
 
 For a camera mounted upside down, set `TARGETCAM_VFLIP` and `TARGETCAM_HMIRROR`
 in `menuconfig`. That keeps +az as "right of the nose" and +el as "above it".
@@ -341,6 +342,39 @@ means retraining the classifier.
    table …`. `main/models/clf_model.h` is a placeholder (`CLF_MODEL_NONE`) while
    no classifier is installed.
 
+## Training the crop CNN (stage 3)
+
+Stage 3 looks at the crop of each of the `cnn_k` largest blobs stage 2 kept
+(`!cnnk`, default 2) with a small int8 network (`main/blob_cnn.h`: three 3×3
+convolutions, 8–16–16 channels, global average, one logistic unit; 16×16 input
+by default, about 166 k multiply-adds and 3.7 k weights) and drops the ones it
+does not believe. The ones past `cnn_k` keep stage 2's verdict; blob 1, the one
+the blimp steers to, is always checked. Like the classifier, a CNN belongs to
+one colour table, and the camera uses it only behind that table
+(`cnn=mismatch` otherwise). Stage 3 needs the classifier too.
+
+**Measure first, on the board** (phase C0): `!cnnbench` (or `!cnnbench 24`)
+runs the network on a synthetic crop 20 times and prints
+`#!CNNBENCH ... us_per_crop=... cycles_per_mac=...`. The feasibility report's
+4–10 cycles per multiply-add is an estimate; this is the measured figure that
+decides the input size and `cnn_k` against the 80 ms period. Without a CNN
+built in it times a zero-weight network of the default shape, which costs the
+same.
+
+`host/train/train_cnn.py` (or tcview's Train tab, stage 3) trains it from frame
+folders and blob sets of the table, in float with numpy alone, then quantises
+it (int8 weights, uint8 activations, integer requantisation) and checks that
+the C network gives the same integer sums as its numpy copy. Training data is
+every blob the table finds, not only the ones the classifier keeps; the
+threshold is chosen by leaving one session out, running each held-out frame
+as stage 3 runs in flight (classifier, then the CNN on the `cnn_k` largest):
+```bash
+python host/train/train_cnn.py --lut models/S/lut_model.bin --clf models/S/clf_model.bin --out models/S data/train/s1 data/train/s3
+```
+It takes minutes, not seconds (one network per held-out session, plus the
+final one). Install the set with tcview's Firmware tab, then `!stage 3` and
+`!save`; `!thr3 <0-99>` moves the threshold without retraining.
+
 ## First power-up checklist
 
 1. Run `host/target_monitor.py --port /dev/ttyACM0`. Check that rows arrive and
@@ -396,6 +430,9 @@ Commands are case-sensitive: `S` is saturation, `s` is the stream.
 | `!reset` | Erase the saved settings and go back to the Kconfig defaults |
 | `!stage <0-3>` | Detector level: 0 HSV, 1 learned colour table, 2 + blob classifier, 3 + CNN. A level whose model is missing or invalid is accepted but **falls back** to the highest complete one; `#!CFG` (`stage_eff`) and every row (`stage`) say what really runs. Live only; `!save` keeps it. |
 | `!flip <0\|1>` | Turn the image 180° in the sensor (vertical flip and mirror together), on top of `TARGETCAM_VFLIP`/`HMIRROR`. For a board whose image arrives upside down. Live; `!save` keeps it. |
+| `!thr3 <0-99>` | Stage 3's threshold, the CNN's, as `!thr2` is the classifier's. Live; `!save` keeps it. |
+| `!cnnk <1-4>` | How many of the blobs stage 2 kept the CNN checks, largest first. Each costs a crop (`!cnnbench`); the rest keep stage 2's verdict. Live; `!save` keeps it. |
+| `!cnnbench [16\|24]` | Time the CNN on the board (phase C0): `#!CNNBENCH n= macs= us_per_crop= cycles_per_mac=`. Stalls one loop by about 20 crops' time. |
 | `!thr2 <0-99>` | Stage 2's threshold in hundredths: a blob is reported when the classifier's confidence reaches it. `0` = the model's own threshold. Higher drops more false blobs and more balloons, a trade that depends on the venue, which is why it is a setting and not only a training choice. Accepted with no classifier too (kept for the next one). Live; `!save` keeps it. |
 | `!collect <0\|1>` | Training data for the blob classifier: every 4th frame and every sent frame (`g`, `v1`), one `#!BLOB` record (features + 24×24 crop) per reported blob, after the row. **Timing is not flight-representative while on.** Live only, never saved. See [Blob records](#blob-records-collect). |
 
@@ -429,7 +466,9 @@ also be `mismatch`, a classifier trained behind another colour table) `lut_id=`
 `csv=2` (the row format) `fw=` (the app version) `collect=` (`!collect`, 0 or 1)
 `fv=` (the blob feature definition, `BLOB_FEAT_VERSION`) `flip=` (`!flip`, 0 or 1)
 `clf_id=` (the classifier's train id, 0 without one) `thr2=` (`!thr2`, 0 = the
-model's) `clf_thr=` (the threshold stage 2 runs with, −1 with no classifier).
+model's) `clf_thr=` (the threshold stage 2 runs with, −1 with no classifier)
+`cnn_id=` `thr3=` `cnn_thr=` (the same three for the CNN; `cnn=` can also be
+`mismatch`).
 After `awb=` (0, 1 or 2) come `wb=` (`frozen`, `auto` or `fixed`) `wb_gain=`
 (the R,G,B gains in use, `0,0,0` when they are not known: in auto and frozen)
 and `wb_fixed=` (the gains `w2` would use, kept while in auto).
@@ -584,7 +623,12 @@ another feature count or version and for values it cannot fly (a threshold
 outside 0–1, a non-finite weight); that the confidence is the logistic
 formula; and that a classifier that believes every blob changes nothing,
 one that believes none reports no target, and one in between drops exactly
-the blobs below threshold and moves the rest up in order.
+the blobs below threshold and moves the rest up in order. The viewer's
+`test_cnn.py` covers stage 3: the trainer's gradients against finite
+differences, the integer network equal to `blob_cnn.c` bit for bit at 16 and
+24, the record checks, and stage 3 through the pipeline (a CNN that believes
+nothing drops exactly the `cnn_k` largest blobs; the rest keep stage 2's
+verdict).
 
 `make test` last runs `test_blob_feat`: the features of shapes with known
 answers (a disc's fill of π/4, a rectangle's aspect ln(w/h), a highlight's
@@ -614,6 +658,8 @@ measured distances (see the checklist).
 | `main/color_lut.h/.c` | Stage 1: the learned colour table (one bit per RGB565 value, 8 kB), its record loader and the HSV-equivalent table the tests use. Portable C. |
 | `main/blob_clf.h/.c` | Stage 2: the blob classifier (logistic regression on the 12 features, 160 B), its record loader and the confidence. Portable C. |
 | `main/models/lut_model.{h,bin,json}` | The trained colour table: the C array the firmware compiles in, the same bytes for the PC tools, and how it was made. Generated by `host/train/train_lut.py`; do not edit. |
+| `main/blob_cnn.h/.c` | Stage 3: the crop CNN (int8, integer to the logit), its record loader, the confidence and its multiply-add count. Portable C, static activations (~15 kB). |
+| `main/models/cnn_model.{h,bin,json}` | The crop CNN, the same way (`host/train/train_cnn.py`); `cnn_model.h` alone, a placeholder, when none is installed. |
 | `main/models/clf_model.{h,bin,json}` | The blob classifier, the same way (`host/train/train_clf.py`). With none installed, `clf_model.h` alone, a placeholder. |
 | `main/target_main.c` | Camera setup, pacing, calibration, mask dump, bearing/range, CSV, commands. |
 | `main/link.h/.c` | Binary packets (`#!FRAME`, `#!BLOB`; CRC-32, one sequence counter) and run-time baud changes with the 3 s safety revert. |
@@ -628,6 +674,7 @@ measured distances (see the checklist).
 | `host/tools/eval_frames.py` | Scores the camera's pipeline on hand-labelled saved frames: blob TP/FN/FP/split, blob 1, pixel precision/recall. `--stage 1` uses the committed table, `--lut` another. |
 | `host/tools/blobs_from_frames.py` | A blob dataset (`.npz`: features, crops, labels) from hand-labelled saved frames, labelled from the paint. Same format as the viewer's Blobs tab. |
 | `host/train/train_lut.py` | Trains the colour table from labelled sessions, choosing its parameters by leave-one-session-out, and writes `main/models/lut_model.*`. Runs in the viewer's `targetcam` env. |
+| `host/train/train_cnn.py` | Trains the stage 3 CNN behind a table and its classifier with numpy alone, quantises it, checks the C network against its integer copy, and chooses the threshold by leave-one-session-out as stage 3 runs in flight. |
 | `host/train/train_clf.py` | Trains the stage 2 blob classifier behind one colour table, from frame folders or blob sets (`.npz`), choosing its L2 penalty and threshold by leave-one-session-out on frame outcomes, and writes `clf_model.*` beside the table (`--out`, default the table's folder). |
 | `host/target_monitor.py` | Live viewer with an azimuth gauge, and a CSV logger (needs `pyserial`). |
 | `host/viewer/` | `tcview`: image, hand calibration, flight-data, frame-labelling and blob-collection screens (PyQt6, own conda env). `tcview/labels.py` holds the label format and the scoring rule that `eval_frames.py` shares; `tcview/blobset.py` the blob dataset format. |

@@ -59,6 +59,8 @@ PARAMS = {
     "mm": ("d%d", "mm"),
     "fov": ("F%.1f", "fov"),
     "thr2": ("!thr2 %d", "thr2"),       # classifier threshold, hundredths; 0 = the model's
+    "thr3": ("!thr3 %d", "thr3"),       # the CNN's, likewise
+    "cnnk": ("!cnnk %d", "cnn_k"),      # blobs the CNN checks
 }
 
 # The detector levels '!stage N' selects (tc_pipeline.h). Each falls back to
@@ -144,7 +146,7 @@ class CalibTab(QWidget):
 
         # The firmware defaults, until the camera's #!CFG says otherwise.
         for key, v in (("hue", 0), ("tol", 12), ("sat", 110), ("val", 50), ("area", 25),
-                       ("mm", 550), ("fov", 54.0), ("thr2", 0)):
+                       ("mm", 550), ("fov", 54.0), ("thr2", 0), ("thr3", 0), ("cnnk", 2)):
             self.p[key]._set_widgets(v)
         for key, ctl in self.p.items():
             ctl.changed.connect(lambda _v: self._redraw())
@@ -487,8 +489,21 @@ class CalibTab(QWidget):
         theme.set_prop(hint, "faint", True)
         cp.addWidget(hint)
         mp.addWidget(self.clf_panel)
-        self.cnn_info = Banner("info", "Stage 3 (the crop CNN) is not built yet (phase P7): "
-                               "the camera runs stage 2 or lower.")
+        self.cnn_info = QWidget()
+        np_ = QVBoxLayout(self.cnn_info)
+        np_.setContentsMargins(0, 4, 0, 0)
+        np_.setSpacing(4)
+        self.cnn_lbl = value_label(wrap=True)
+        np_.addWidget(self.cnn_lbl)
+        self.p["thr3"] = ParamControl("Threshold", 0, 99, unit=" /100")
+        self.p["thr3"].setToolTip("!thr3: a checked blob is reported when the CNN's confidence "
+                                  "reaches this. 0 = the model's own. Save to camera keeps it.")
+        np_.addWidget(self.p["thr3"])
+        self.p["cnnk"] = ParamControl("Blobs checked", 1, 4)
+        self.p["cnnk"].setToolTip("!cnnk: the CNN checks this many of the blobs stage 2 kept, "
+                                  "largest first; each costs a crop's multiply-adds "
+                                  "(!cnnbench measures it). The others keep stage 2's verdict.")
+        np_.addWidget(self.p["cnnk"])
         mp.addWidget(self.cnn_info)
         s.add_widget(self.model_panel)
         return s
@@ -498,11 +513,12 @@ class CalibTab(QWidget):
         return max(0, self.stage_combo.currentIndex())
 
     def _thr2_models(self):
-        """The firmware's models, the classifier at the threshold the control
-        shows (the camera's !thr2 once applied), so the PC boxes are the
-        camera's from stage 2 up."""
-        t = self.p["thr2"].local
-        return D.with_threshold(D.models(), t / 100.0 if t else None)
+        """The firmware's models at the thresholds and cnn_k the controls show
+        (the camera's !thr2, !thr3, !cnnk once applied), so the PC boxes are
+        the camera's from stage 2 up."""
+        t2, t3 = self.p["thr2"].local, self.p["thr3"].local
+        return D.with_threshold(D.models(), t2 / 100.0 if t2 else None,
+                                t3 / 100.0 if t3 else None, self.p["cnnk"].local)
 
     def _apply_stage_view(self):
         """Show the calibration of the chosen stage, and only that."""
@@ -527,6 +543,19 @@ class CalibTab(QWidget):
             and v["clf_thr"] >= 0 else "-")) if v else "camera: not connected"
         self.clf_info.setText("Blob classifier (stage 2)\n  PC: %s\n  %s" % (pc_clf, cam_clf))
         self.p["thr2"].setEnabled(bool(pc.clf) or v.get("clf") == "ok")
+        if pc.cnn:
+            pc_cnn = "id %d, %dx%d input, threshold %.2f in the model" % (
+                pc.cnn_id, pc.cnn_model.n, pc.cnn_model.n, pc.cnn_model.threshold)
+        else:
+            pc_cnn = "none (the Firmware tab installs one)"
+        cam_cnn = ("camera: %s%s\n  running threshold %s" % (
+            v.get("cnn", "?"), " id %s" % v["cnn_id"] if "cnn_id" in v else "",
+            "%.2f" % v["cnn_thr"] if isinstance(v.get("cnn_thr"), (int, float))
+            and v["cnn_thr"] >= 0 else "-")) if v else "camera: not connected"
+        self.cnn_lbl.setText("Crop CNN (stage 3)\n  PC: %s\n  %s" % (pc_cnn, cam_cnn))
+        on3 = bool(pc.cnn) or v.get("cnn") == "ok"
+        self.p["thr3"].setEnabled(on3)
+        self.p["cnnk"].setEnabled(on3)
         self._refresh_summaries()
 
     def _build_blobs(self) -> CollapsibleSection:

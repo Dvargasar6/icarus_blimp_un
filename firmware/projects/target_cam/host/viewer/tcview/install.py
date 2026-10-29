@@ -42,13 +42,17 @@ BUILD_DIR = Lib.TARGET_CAM / "build"
 APP_BIN = BUILD_DIR / "target_cam.bin"
 FILES = {k: tuple("%s_model.%s" % (k, e) for e in ("bin", "h", "json")) for k in Lib.KINDS}
 CLF_MAGIC_HDR = b"TCBC\x01\x00\x14\x00"     # magic, version 1, 20-byte header
+CNN_MAGIC_HDR = b"TCCN\x01\x00\x14\x00"
 
 
-def none_header() -> str:
-    """main/models/clf_model.h with no classifier: train_clf.py's own copy,
+def none_header(kind: str = "clf") -> str:
+    """main/models/<kind>_model.h with no such model: the trainer's own copy,
     which a test checks the committed file against."""
     import sys
     sys.path.insert(0, str(Lib.TARGET_CAM / "host" / "train"))
+    if kind == "cnn":
+        import train_cnn
+        return train_cnn.NONE_HEADER
     import train_clf
     return train_clf.NONE_HEADER
 
@@ -61,6 +65,8 @@ class Installed:
     clf_id: int             # 0 none
     clf_state: str          # "none" | "ok" | "mismatch" | "bad"
     same_as: str            # a set under models/ with the same bytes, or ""
+    cnn_id: int = 0
+    cnn_state: str = "none"
 
 
 def installed(fw: Path = Lib.FIRMWARE_MODELS, models: Path = Lib.MODELS_DIR) -> Installed:
@@ -79,7 +85,15 @@ def installed(fw: Path = Lib.FIRMWARE_MODELS, models: Path = Lib.MODELS_DIR) -> 
             state = "ok" if c.lut_id == lut_id else "mismatch"
         except D.ModelError:
             state = "bad"
-    return Installed(lut_id, clf_id, state, same_set(fw, models))
+    cnn_id, cstate = 0, "none"
+    cnn = fw / "cnn_model.bin"
+    if cnn.exists():
+        try:
+            c, cnn_id = D.load_cnn(cnn.read_bytes())
+            cstate = "ok" if c.lut_id == lut_id else "mismatch"
+        except D.ModelError:
+            cstate = "bad"
+    return Installed(lut_id, clf_id, state, same_set(fw, models), cnn_id, cstate)
 
 
 def _same(a: Path, b: Path) -> bool:
@@ -113,11 +127,17 @@ def check_installable(s: Lib.ModelSet) -> str:
         except (OSError, D.ModelError) as e:
             return ("Its classifier fails the camera's check: %s. Retrain it for this table "
                     "or remove it from the folder." % e)
-    for k in ("lut", "clf"):
+    if s.has("cnn"):
+        if not s.has("clf"):
+            return "It has a CNN but no classifier: stage 3 needs both."
+        try:
+            D.add_cnn(m, s.bin("cnn").read_bytes())
+        except (OSError, D.ModelError) as e:
+            return ("Its CNN fails the camera's check: %s. Retrain it for this table or "
+                    "remove it from the folder." % e)
+    for k in Lib.KINDS:
         if s.has(k) and not (s.path / ("%s_model.h" % k)).exists():
             return "%s_model.h is missing in %s." % (k, s.path)
-    if s.has("cnn"):
-        return "Stage 3 (the CNN) cannot be built into the firmware yet (phase P7)."
     return ""
 
 
@@ -158,14 +178,15 @@ def install(s: Lib.ModelSet, fw: Path = Lib.FIRMWARE_MODELS, models: Path = Lib.
     for f in FILES["lut"]:
         if (s.path / f).exists():
             shutil.copy2(s.path / f, fw / f)
-    if s.has("clf"):            # check_installable ran the C check: it is this table's
-        for f in FILES["clf"]:
-            if (s.path / f).exists():
-                shutil.copy2(s.path / f, fw / f)
-    else:
-        for f in ("clf_model.bin", "clf_model.json"):
-            (fw / f).unlink(missing_ok=True)
-        (fw / "clf_model.h").write_text(none_header())
+    for k in ("clf", "cnn"):    # check_installable ran the C checks: they are this table's
+        if s.has(k):
+            for f in FILES[k]:
+                if (s.path / f).exists():
+                    shutil.copy2(s.path / f, fw / f)
+        else:
+            for f in ("%s_model.bin" % k, "%s_model.json" % k):
+                (fw / f).unlink(missing_ok=True)
+            (fw / ("%s_model.h" % k)).write_text(none_header(k))
     after = installed(fw, models)
     if s.lut_id is not None and after.lut_id != s.lut_id:
         raise RuntimeError("main/models did not end up with %s's table (id %s, found %s)"
@@ -215,10 +236,14 @@ def build_has(fw: Path = Lib.FIRMWARE_MODELS, app: Path = APP_BIN) -> Optional[b
     lut = fw / "lut_model.bin"
     if lut.exists() and lut.read_bytes() not in img:
         return False
-    clf = fw / "clf_model.bin"
-    if clf.exists():
-        return clf.read_bytes() in img
-    return CLF_MAGIC_HDR not in img
+    for k, hdr in (("clf", CLF_MAGIC_HDR), ("cnn", CNN_MAGIC_HDR)):
+        rec = fw / ("%s_model.bin" % k)
+        if rec.exists():
+            if rec.read_bytes() not in img:
+                return False
+        elif hdr in img:
+            return False                # an older image still holds one
+    return True
 
 
 # ---- the camera ------------------------------------------------------------------
@@ -234,7 +259,8 @@ def camera_ids(cfg: dict) -> dict:
     """The model state a #!CFG reports."""
     return dict(lut=str(cfg.get("lut", "?")), lut_id=_int(cfg.get("lut_id")),
                 clf=str(cfg.get("clf", "?")), clf_id=_int(cfg.get("clf_id")),
-                has_clf_id="clf_id" in cfg, fw=str(cfg.get("fw", "?")),
+                has_clf_id="clf_id" in cfg, cnn=str(cfg.get("cnn", "?")),
+                cnn_id=_int(cfg.get("cnn_id")), has_cnn_id="cnn_id" in cfg, fw=str(cfg.get("fw", "?")),
                 stage=cfg.get("stage", "?"), stage_eff=cfg.get("stage_eff", "?"))
 
 
@@ -247,10 +273,19 @@ def camera_verdict(cfg: dict, want: Installed) -> tuple[str, str]:
     if c["lut"] != "ok" or c["lut_id"] != want.lut_id:
         return "err", head + " — NOT the installed table (id %d). Build and flash again." \
             % want.lut_id
+    if want.cnn_state == "ok":
+        if c["cnn"] != "ok" or (c["has_cnn_id"] and c["cnn_id"] != want.cnn_id):
+            return "err", head + " — the CNN is not the installed one (id %d). Build and " \
+                "flash again." % want.cnn_id
+    elif c["cnn"] == "ok":
+        return "warn", head + " — the camera still has a CNN: flash the latest build."
     if want.clf_state == "ok":
         if c["clf"] != "ok" or (c["has_clf_id"] and c["clf_id"] != want.clf_id):
             return "err", head + " — the table is right but the classifier is not " \
                 "(installed id %d). Build and flash again." % want.clf_id
+        if want.cnn_state == "ok":
+            return "ok", head + " — table, classifier and CNN are the installed ones. To use " \
+                "the CNN: !stage 3, then !save."
         return "ok", head + " — table and classifier are the installed ones. To use the " \
             "classifier: !stage 2, then !save."
     if c["clf"] == "ok":

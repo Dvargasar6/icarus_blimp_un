@@ -210,3 +210,38 @@ def test_no_build_no_flash(dirs, tmp_path):
     assert not t.flash_btn.isEnabled() and t.build_banner.tone() == "warn"
     t.activate.setText("")
     assert not t.build_btn.isEnabled() and "activation script" in t.why.text()
+
+
+def test_install_a_set_with_a_cnn_and_back(dirs, tmp_path):
+    import train_cnn
+    fw, models = dirs
+    s = Lib.load_set(models / "with_clf")
+    q = train_cnn.quantise(train_cnn.Net(16), np.random.default_rng(0).integers(
+        0, 256, (8, 3, 16, 16), dtype=np.uint8), 0.5)
+    rec = train_cnn.record(q, s.lut_id, 88)
+    (s.path / "cnn_model.bin").write_bytes(rec)
+    (s.path / "cnn_model.h").write_text(train_cnn.c_header(rec, dict(
+        train_id=88, lut_id=s.lut_id, n=16, threshold=0.5, sessions=["x"])))
+    (s.path / "cnn_model.json").write_text(json.dumps(dict(train_id=88, lut_id=s.lut_id,
+                                                           threshold=0.5, n=16)))
+    s = Lib.load_set(s.path)
+    assert s.stages == [1, 2, 3] and I.check_installable(s) == ""
+    I.install(s, fw, models)
+    inst = I.installed(fw, models)
+    assert inst.cnn_state == "ok" and inst.cnn_id == 88
+    cfg = dict(lut="ok", lut_id=inst.lut_id, clf="ok", clf_id=77, cnn="ok", cnn_id=88,
+               fw="t", stage=3, stage_eff=3)
+    assert I.camera_verdict(cfg, inst)[0] == "ok" and "!stage 3" in I.camera_verdict(cfg, inst)[1]
+    assert I.camera_verdict(dict(cfg, cnn="none"), inst)[0] == "err"
+    app = tmp_path / "app.bin"
+    app.write_bytes((fw / "lut_model.bin").read_bytes() + (fw / "clf_model.bin").read_bytes())
+    assert I.build_has(fw, app) is False                    # the CNN is not built in
+    app.write_bytes(app.read_bytes() + rec)
+    assert I.build_has(fw, app) is True
+    # Back to a set without a CNN: its placeholder returns.
+    I.install(Lib.load_set(models / "other"), fw, models)
+    assert (fw / "cnn_model.h").read_text() == train_cnn.NONE_HEADER
+    assert not (fw / "cnn_model.bin").exists() and I.installed(fw, models).cnn_state == "none"
+    # A CNN without a classifier cannot be installed: stage 3 runs after 2.
+    shutil.copy(s.path / "cnn_model.bin", models / "other" / "cnn_model.bin")
+    assert "no classifier" in I.check_installable(Lib.load_set(models / "other"))

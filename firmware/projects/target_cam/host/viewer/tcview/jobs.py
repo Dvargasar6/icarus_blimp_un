@@ -70,6 +70,26 @@ def clf_command(out: Path, sessions: list, l2: Optional[float] = None,
     return cmd + [Lib.rel(s.path) for s in sessions]
 
 
+def cnn_command(out: Path, sessions: list, threshold: Optional[float] = None,
+                max_lost: Optional[float] = None, size: int = 16, epochs: int = 40,
+                cnn_k: int = 2, allow_stage0: bool = False) -> list:
+    """train_cnn.py behind the table and classifier already copied into
+    `out` (library.new_set with upto="clf")."""
+    out = Path(out)
+    # Always behind the classifier: stage 3 runs after stage 2, and the set
+    # is made from a parent that has one (the Train tab checks it).
+    cmd = [sys.executable, str(Lib.TRAIN_CNN), "--lut", Lib.rel(out / "lut_model.bin"),
+           "--clf", Lib.rel(out / "clf_model.bin")]
+    cmd += ["--out", Lib.rel(out), "--size", str(size), "--epochs", str(epochs),
+            "--cnn-k", str(cnn_k)]
+    for flag, v in (("--threshold", threshold), ("--max-lost", max_lost)):
+        if v is not None:
+            cmd += [flag, "%g" % v]
+    if allow_stage0:
+        cmd.append("--allow-stage0")
+    return cmd + [Lib.rel(s.path) for s in sessions]
+
+
 def pretty(cmd: list) -> str:
     """The command as typed in a terminal from target_cam/ (the env's python)."""
     out = ["python"]

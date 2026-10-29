@@ -2,11 +2,12 @@
 Train: pick data folders and a stage, name the result, train.
 
 Stage 1 trains a colour table (host/train/train_lut.py), stage 2 a blob
-classifier behind a table (train_clf.py), stage 3 the crop CNN (phase P7, not
-built yet). Stage 0 is not here: it is calibrated by hand on the Image &
+classifier behind a table (train_clf.py), stage 3 the crop CNN behind a table
+and its classifier (train_cnn.py). Stage 0 is not here: it is calibrated by hand on the Image &
 calibration tab. Every run writes a new model set, models/<name>/
 (library.py): for stage 2 the parent set's table is copied in first and the
-classifier is written beside it, so the parent is never changed and the
+classifier is written beside it (for stage 3 the table and the classifier,
+and the CNN beside them), so the parent is never changed and the
 result can be installed whole. The firmware's set (main/models) is never
 written here; that is the Firmware tab's job.
 
@@ -25,6 +26,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel,
+                             QSpinBox,
                              QLineEdit, QPlainTextEdit, QPushButton, QRadioButton,
                              QScrollArea, QVBoxLayout, QWidget)
 
@@ -93,6 +95,32 @@ def judge_clf(meta: dict) -> tuple[str, str]:
     return tone, text
 
 
+def judge_cnn(meta: dict) -> tuple[str, str]:
+    """Banner (tone, text) from a cnn_model.json."""
+    iv = meta.get("int_vs_float") or {}
+    head = ("CNN id %s behind table %s: %sx%s input, %s multiply-adds per crop, threshold "
+            "%.2f; the integer network decides %d training crop(s) differently from the "
+            "float one." % (meta.get("train_id", "?"), meta.get("lut_id", "?"),
+                             meta.get("n", "?"), meta.get("n", "?"), meta.get("macs", "?"),
+                             meta.get("threshold", 0), iv.get("flips", 0)))
+    rows, base = meta.get("search") or [], meta.get("base_held_out")
+    warns = list(meta.get("warnings") or [])
+    if not rows or not base:
+        tone, text = "info", head + " Threshold fixed: no held-out figures."
+    else:
+        b = rows[0]
+        text = head + (" Held out: false blob 1 %d → %d, wrong blob 1 %d → %d, balloons lost "
+                       "%d → %d (%s alone → with the CNN)." % (
+                           base["false_b1"], b["false_b1"], base["wrong_b1"], b["wrong_b1"],
+                           base["fn"], b["fn"], meta.get("base", "stage 2")))
+        tone = "err" if b.get("excluded") else ("warn" if warns else "ok")
+    if warns:
+        text += " WARNING: " + " ".join(warns)
+    if meta.get("data_warnings"):
+        text += " Data: " + " ".join(meta["data_warnings"])
+    return tone, text
+
+
 def _spin(lo, hi, step, value, decimals=2) -> QDoubleSpinBox:
     s = QDoubleSpinBox()
     s.setRange(lo, hi)
@@ -144,8 +172,6 @@ class TrainTab(QWidget):
 
         sec = CollapsibleSection("Stage")
         self.stage = SegmentedButtons(STAGES, 1)
-        self.stage.buttons[3].setEnabled(False)
-        self.stage.buttons[3].setToolTip("The crop CNN is phase P7 (RECOGNITION.md)")
         self.stage.changed.connect(self._stage_changed)
         sec.add_widget(self.stage)
         self.stage_hint = value_label("", mono=False, wrap=True)
@@ -174,6 +200,18 @@ class TrainTab(QWidget):
         self.min_ev = _spin(0.1, 5, 0.5, LUT_FIXED["min_evidence"], 1)
         self.l2 = _spin(0.001, 100, 0.5, CLF_FIXED["l2"], 3)
         self.threshold = _spin(0.05, 0.95, 0.05, CLF_FIXED["threshold"])
+        self.cnn_threshold = _spin(0.05, 0.95, 0.05, 0.5)
+        self.cnn_size = QComboBox()
+        self.cnn_size.addItem("16 × 16 (about 166 k mult-adds)", 16)
+        self.cnn_size.addItem("24 × 24 (about 373 k mult-adds)", 24)
+        self.cnn_epochs = QSpinBox()
+        self.cnn_epochs.setRange(1, 500)
+        self.cnn_epochs.setValue(40)
+        self.cnn_k = QSpinBox()
+        self.cnn_k.setRange(1, 4)
+        self.cnn_k.setValue(2)
+        self.cnn_k.setToolTip("Blobs the CNN checks per frame, the largest stage 2 kept "
+                              "(the camera's !cnnk)")
         self.max_lost = _spin(0, 1, 0.05, 0.10)
         self.max_lost.setToolTip("Exclude classifier settings that lose more than this "
                                  "fraction of the balloons stage 1 found (held out)")
@@ -182,12 +220,17 @@ class TrainTab(QWidget):
                 ("sigma", "sigma", self.sigma, 1), ("k", "k", self.k, 1),
                 ("min_ev", "min evidence", self.min_ev, 1), ("l2", "L2 penalty", self.l2, 2),
                 ("threshold", "threshold", self.threshold, 2),
-                ("max_lost", "max balloons lost", self.max_lost, 2))):
+                ("cnn_size", "input size", self.cnn_size, 3),
+                ("cnn_epochs", "epochs", self.cnn_epochs, 3),
+                ("cnn_k", "blobs checked (cnn_k)", self.cnn_k, 3),
+                ("cnn_threshold", "threshold", self.cnn_threshold, 3),
+                ("max_lost", "max balloons lost", self.max_lost, (2, 3)))):
             lab = QLabel(lbl)
             grid.addWidget(lab, r, 0)
             grid.addWidget(w, r, 1)
             self._param_rows[key] = (lab, w, stage)
-            w.valueChanged.connect(self._refresh)
+            (w.currentIndexChanged if isinstance(w, QComboBox) else w.valueChanged).connect(
+                self._refresh)
         sec.add_layout(grid)
         fl.addWidget(sec)
 
@@ -282,10 +325,12 @@ class TrainTab(QWidget):
 
     def _stage_changed(self, stage):
         self._stage = int(stage)
-        self.picker.set_blobsets(self._stage == 2)
+        self.picker.set_blobsets(self._stage >= 2)
         self.parent_sec.setVisible(self._stage >= 2)
-        for lab, w, st in self._param_rows.values():
-            on = st == self._stage
+        for key, (lab, w, st) in self._param_rows.items():
+            on = self._stage in st if isinstance(st, tuple) else st == self._stage
+            if key in ("cnn_size", "cnn_epochs", "cnn_k"):
+                on = self._stage == 3       # used with Auto as well as Fixed
             lab.setVisible(on)
             w.setVisible(on)
         self.stage_hint.setText({
@@ -294,7 +339,11 @@ class TrainTab(QWidget):
             2: "A blob classifier behind the parent's colour table, from the blobs that "
                "table finds in the labelled frames (or from blob sets collected at stage 1 "
                "with that table). The new set holds a copy of the table plus the classifier.",
-            3: "Phase P7."}[self._stage])
+            3: "A crop CNN behind the parent's table and classifier, from the crops of every "
+               "blob the table finds (not only the ones the classifier keeps). The threshold "
+               "is chosen as stage 3 runs in flight: the classifier first, then the CNN on "
+               "the largest cnn_k blobs. The new set holds copies of the table and the "
+               "classifier plus the CNN. Training takes minutes, not seconds."}[self._stage])
         self.reload_sets()
 
     def _suggested(self) -> str:
@@ -307,12 +356,19 @@ class TrainTab(QWidget):
         if self._stage == 1:
             return dict(sigma=self.sigma.value(), k=self.k.value(),
                         min_evidence=self.min_ev.value())
+        if self._stage == 3:
+            return dict(threshold=self.cnn_threshold.value())
         return dict(l2=self.l2.value(), threshold=self.threshold.value())
 
     def command(self, out: Path) -> list:
         ss = self.picker.sessions()
         if self._stage == 1:
             return J.lut_command(out, ss, **self._params())
+        if self._stage == 3:
+            return J.cnn_command(out, ss, max_lost=self.max_lost.value(),
+                                 size=self.cnn_size.currentData(),
+                                 epochs=self.cnn_epochs.value(), cnn_k=self.cnn_k.value(),
+                                 **self._params())
         return J.clf_command(out, ss, max_lost=self.max_lost.value(), **self._params())
 
     def problems(self) -> list[str]:
@@ -321,8 +377,6 @@ class TrainTab(QWidget):
         ss = self.picker.sessions()
         if self.job.running():
             out.append("A training run is in progress.")
-        if self._stage == 3:
-            out.append("Stage 3 is not built yet.")
         if not ss:
             out.append("Check at least one data folder.")
         if self._stage == 1 and any(s.is_blobset for s in ss):
@@ -370,7 +424,7 @@ class TrainTab(QWidget):
         name = self.name.text().strip() or self._suggested()
         parent = self.parent_set() if self._stage >= 2 else None
         try:
-            self.out_dir = Lib.new_set(name, parent, "lut" if self._stage == 2 else None,
+            self.out_dir = Lib.new_set(name, parent, {1: None, 2: "lut", 3: "clf"}[self._stage],
                                        self.models_dir)
         except (OSError, ValueError) as e:
             self.banner.set("err", "Cannot create models/%s: %s" % (name, e))
@@ -407,7 +461,7 @@ class TrainTab(QWidget):
                 meta = json.loads((out / ("%s_model.json" % kind)).read_text())
             except (OSError, ValueError):
                 meta = {}
-            tone, msg = (judge_lut if stage == 1 else judge_clf)(meta)
+            tone, msg = {1: judge_lut, 2: judge_clf, 3: judge_cnn}[stage](meta)
             self.banner.set(tone, "models/%s: %s" % (out.name, msg))
             self.last_set = out
             self.name.clear()
@@ -431,7 +485,7 @@ class TrainTab(QWidget):
         root = store.value("root", "", type=str)
         if root and Path(root).is_dir():
             self.picker.set_root(Path(root))
-        st = persist.read_int(store, "stage", 1, 2)
+        st = persist.read_int(store, "stage", 1, 3)
         if st:
             self.stage.set_value(st)
             self._stage_changed(st)

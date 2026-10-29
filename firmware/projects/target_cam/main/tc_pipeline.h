@@ -37,6 +37,7 @@ extern "C" {
 #define TC_STAGE_MAX    3
 
 struct blob_clf;        /* blob_clf.h, which includes this file */
+struct blob_cnn;        /* blob_cnn.h, likewise                 */
 
 /* Validated models, one per learned stage; NULL = absent. Each becomes a
    concrete type in the phase that introduces its stage. */
@@ -46,7 +47,13 @@ typedef struct {
     const struct blob_clf *clf; /* stage 2: blob classifier (blob_clf.h). The
                            caller passes it only behind the colour table it
                            was trained with (blob_clf.h, lut_id).            */
-    const void *cnn;    /* stage 3: int8 CNN (Phase C2)                       */
+    const struct blob_cnn *cnn; /* stage 3: crop CNN (blob_cnn.h), behind the
+                           same colour table                                 */
+    int cnn_k;          /* blobs the CNN checks, the largest of those stage 2
+                           kept: 1..BLOB_MAX_REPORT (0 is taken as 2). The
+                           ones past it are reported with stage 2's verdict:
+                           the CNN's cost is per crop, and blob 1, the one the
+                           blimp steers to, is always checked                */
 } tc_models_t;
 
 typedef struct {
@@ -62,6 +69,8 @@ typedef struct {
     int32_t t_px_us;            /* per-pixel colour test (HSV or table)       */
     int32_t t_b_us;             /* blob features + classifier                 */
     int32_t t_c_us;             /* crops + CNN                                */
+    int     n_cnn;              /* blobs the CNN checked (stage 3)            */
+    int     n_rejected3;        /* of those, the ones it dropped              */
     int32_t t_total_us;         /* the whole call                             */
     int     n_feat;             /* entries of feat[] filled: r.n_report when
                                    features were computed, else 0             */

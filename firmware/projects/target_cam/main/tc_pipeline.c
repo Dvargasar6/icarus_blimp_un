@@ -4,11 +4,13 @@
  * Stage 1 (Phase A2) is the colour table: the same detector with a different
  * pixel test, switched in through cfg->lut. Stage 2 (Phase B2) computes each
  * reported blob's features (Phase B1) and drops the blobs the classifier does
- * not believe. Stage 3 has no model yet, so a request for it falls back.
+ * not believe. Stage 3 (Phase C2) crops the largest survivors and drops the
+ * ones the CNN does not believe.
  */
 #include "tc_pipeline.h"
 
 #include "blob_clf.h"
+#include "blob_cnn.h"
 
 #include <string.h>
 
@@ -75,6 +77,52 @@ static void classify(const struct blob_clf *clf, tc_result_t *out)
     out->n_feat = n;
 }
 
+/* Stage 3: the CNN looks at the crops of the cnn_k largest blobs stage 2
+   kept, drops the ones it does not believe, and the rest move up, as at
+   stage 2. Its confidence replaces stage 2's for the blobs it checked; the
+   ones past cnn_k keep stage 2's (see tc_models_t). */
+static void cnn_check(const blob_cfg_t *c, const struct blob_cnn *cnn, int cnn_k,
+                      const uint8_t *frame, tc_result_t *out)
+{
+    blob_result_t *r = &out->r;
+    int k_max = cnn_k >= 1 && cnn_k <= BLOB_MAX_REPORT ? cnn_k : 2;
+    int checked = r->n_report < k_max ? r->n_report : k_max;
+    static uint16_t crop[BLOB_CROP * BLOB_CROP];
+    static uint16_t small[BLOB_CROP_SMALL * BLOB_CROP_SMALL];
+    int n = 0;
+    for (int k = 0; k < r->n_report; k++) {
+        if (k < checked) {
+            blob_crop_box_t box;
+            blob_crop_box(&r->b[k], &box);
+            blob_crop(c, frame, &box, crop);
+            const uint16_t *in = crop;
+            if (cnn->n == BLOB_CROP_SMALL) {
+                blob_crop_down16(crop, small);
+                in = small;
+            }
+            float p = blob_cnn_conf(cnn, in);
+            if (p < cnn->threshold) continue;
+            out->conf[n] = p;
+        } else {
+            out->conf[n] = out->conf[k];
+        }
+        r->b[n] = r->b[k];
+        out->feat[n] = out->feat[k];
+        n++;
+    }
+    out->n_cnn = checked;
+    out->n_rejected3 = r->n_report - n;
+    for (int k = n; k < BLOB_MAX_REPORT; k++) {
+        memset(&r->b[k], 0, sizeof r->b[k]);
+        memset(&out->feat[k], 0, sizeof out->feat[k]);
+        out->conf[k] = -1.0f;
+    }
+    r->n_blobs -= out->n_rejected3;
+    r->n_report = n;
+    r->found = n > 0;
+    out->n_feat = n;
+}
+
 int tc_pipeline_run(const blob_cfg_t *cfg, int stage_req, int flags,
                     const tc_models_t *m, const uint8_t *frame, void *work,
                     blob_clock_fn now_us, tc_result_t *out)
@@ -85,6 +133,8 @@ int tc_pipeline_run(const blob_cfg_t *cfg, int stage_req, int flags,
     out->t_b_us = 0;
     out->t_c_us = 0;
     out->n_rejected = 0;
+    out->n_cnn = 0;
+    out->n_rejected3 = 0;
     for (int k = 0; k < BLOB_MAX_REPORT; k++) out->conf[k] = -1.0f;
 
     /* Stage 1 changes only the pixel test. Labelling, the moments and the
@@ -106,6 +156,11 @@ int tc_pipeline_run(const blob_cfg_t *cfg, int stage_req, int flags,
         out->n_feat = out->r.n_report;
         if (out->stage >= 2) classify(m->clf, out);
         out->t_b_us = now_us ? (int32_t)(now_us() - tb) : 0;
+    }
+    if (out->stage >= 3) {
+        int64_t tc = now_us ? now_us() : 0;
+        cnn_check(&c, m->cnn, m->cnn_k, frame, out);
+        out->t_c_us = now_us ? (int32_t)(now_us() - tc) : 0;
     }
 
     out->t_total_us = now_us ? (int32_t)(now_us() - t0) : 0;

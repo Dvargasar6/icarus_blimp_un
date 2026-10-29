@@ -373,8 +373,23 @@ fijas; los tres sets actuales quedan como lote de prueba.
 
 ## 6. Etapa 3 — Red neuronal pequeña sobre recortes
 
-**Estado: no implementada.** Solo existen los recortes (`blob_crop()`,
-`blob_crop_down16()`, 24×24 en cada registro `#!BLOB`).
+**Estado: implementada en P7 (2026-10-29); falta medirla en el board (C0) y
+entrenarla con datos que la justifiquen.** `main/blob_cnn.{c,h}` (registro
+`TCCN`, int8 entero hasta el logit), etapa 3 en `tc_pipeline.c`, carga en
+`target_main.c` (`cnn=ok|none|bad|mismatch`, `cnn_id`), comandos `!thr3`,
+`!cnnk`, `!cnnbench`, ajustes v7, `host/train/train_cnn.py` (numpy) y las
+pestañas Train, Verify, Firmware y calibración.
+
+Primera corrida real (detrás de `tabla_1_s3`, sesiones `s1` y `s3`, 205
+recortes, 23 s): la red entera decide igual que la float en los 205 recortes
+(diferencia máxima de confianza 0.034), el C da las mismas sumas que la copia
+entera en numpy, y la CNN **no baja el costo** con sesión fuera (49, igual que
+la etapa 2 sola). Con dos sesiones de ganancias distintas y 49 recortes en un
+pliegue, el límite son los datos, no la red (report §12).
+
+Decisión tomada al implementar (para revisar): los supervivientes de la etapa
+2 fuera de `cnn_k` se reportan con la confianza de la etapa 2; el blob 1, al
+que se dirige el dirigible, siempre lo revisa la CNN.
 
 ### 6.1 Cómo funciona (diseño)
 
@@ -553,7 +568,7 @@ queden abiertas se hacen al implementar cada funcionalidad.
 | **B3 — Etapa 2 en el board** | `csv_report.py` a `!stage 2`, escena con globo + madera + globo naranja | 0 filas `dt≠80`; `t_b_us`; desaparecen los falsos; el globo se conserva |
 | **P6 — Cambios en tcview** ✓ | Calibración por etapa (+ comandos de umbral en el firmware, NVS v6), zoom con lupas, relleno de interior | Tests; capturas a 1280×720 |
 | **C0 — Medir antes de la CNN** | Microbenchmark de conv 3×3 int8 en el board | Ciclos/MAC medidos; decisión 16 vs 24 y `cnn_k` |
-| **P7 — Etapa 3, núcleo** | `train_cnn.py` (numpy), `blob_cnn.{c,h}` (registro `TCCN`, guarda `lut_id`), etapa 3 en `tc_pipeline`, equivalencia bit a bit C ↔ referencia entera en numpy | `make test`, pytest |
+| **P7 — Etapa 3, núcleo** ✓ | `train_cnn.py` (numpy), `blob_cnn.{c,h}` (registro `TCCN`, guarda `lut_id`), etapa 3 en `tc_pipeline`, equivalencia bit a bit C ↔ referencia entera en numpy | `make test`, pytest |
 | **P8 — Etapa 3 en la GUI y en el board** | Train/Verify/Firmware para la etapa 3; corrida larga | 0 filas `dt≠80`; temperatura ≥ 10 min; mejora medida sobre la etapa 2 |
 | **D — `!dump` y carga a NVS** | Leer y escribir registros de modelo por serie, con CRC | Modelo leído = modelo instalado |
 | **R — Rango** | Corrección con 3–4 distancias medidas; calibración de FOV | Error de rango antes/después |

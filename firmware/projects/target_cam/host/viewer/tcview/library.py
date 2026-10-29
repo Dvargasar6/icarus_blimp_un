@@ -46,6 +46,7 @@ MODELS_DIR = TARGET_CAM / "models"
 FIRMWARE_MODELS = TARGET_CAM / "main" / "models"
 TRAIN_LUT = TARGET_CAM / "host" / "train" / "train_lut.py"
 TRAIN_CLF = TARGET_CAM / "host" / "train" / "train_clf.py"
+TRAIN_CNN = TARGET_CAM / "host" / "train" / "train_cnn.py"
 
 KINDS = ("lut", "clf", "cnn")           # stage 1, 2, 3
 LABEL_SUFFIX = ".labels.png"
@@ -252,6 +253,13 @@ class ModelSet:
             return "none"
         if not m:
             return "no %s_model.json" % kind
+        if kind == "cnn" and m:
+            bad = "" if self.belongs(kind) else "  (trained behind table %s: NOT USED)" \
+                % m.get("lut_id", "?")
+            return "id %s · %sx%s · threshold %s · %s mult-adds · %s%s" % (
+                m.get("train_id", "?"), m.get("n", "?"), m.get("n", "?"),
+                m.get("threshold", "?"), m.get("macs", "?"),
+                " + ".join(self.sessions(kind)) or "?", bad)
         if kind == "lut":
             return "id %s · sigma %s · k %s · %s colours · %s" % (
                 m.get("train_id", "?"), m.get("sigma", "?"), m.get("k", "?"),

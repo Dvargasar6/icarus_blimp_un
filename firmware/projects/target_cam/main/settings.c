@@ -26,16 +26,23 @@
        its size.
    v6: 'thr2' (!thr2) in v5's spare byte. A v5 record wrote it as zero,
        which means "the model's own threshold", so v5 records load as they
-       are: same size, same layout, and the meaning of zero kept. */
-#define VERSION     6
+       are: same size, same layout, and the meaning of zero kept.
+   v7: 'thr3' (!thr3), appended with three spare bytes: 36 B. A v5 or v6
+       record is its first 32 B, read by size as v1-v4 records are, and
+       gains thr3 0, the model's own threshold. */
+#define VERSION     7
 
-/* The size of tc_settings_t in v1-v4: the part of a v5 record they share. */
+/* The size of tc_settings_t in v1-v4, and in v5-v6: the prefixes of a v7
+   record they are. */
 #define OLD_SIZE    28
+#define V6_SIZE     32
 
-_Static_assert(sizeof(tc_settings_t) == 32, "tc_settings_t changed size: "
+_Static_assert(sizeof(tc_settings_t) == 36, "tc_settings_t changed size: "
                "review settings_load() and add a migration");
 _Static_assert(offsetof(tc_settings_t, wb_gain) == OLD_SIZE, "the v5 fields must "
                "follow the v1-v4 ones, or an old record cannot be read as a prefix");
+_Static_assert(offsetof(tc_settings_t, thr3) == V6_SIZE, "the v7 fields must "
+               "follow the v6 ones, or a v6 record cannot be read as a prefix");
 
 typedef struct {
     uint16_t      version;
@@ -70,7 +77,8 @@ bool settings_load(tc_settings_t *out, bool *migrated)
         return false;
     }
     bool old = r.version >= 1 && r.version <= 4;
-    size_t want = old ? OLD_SIZE : sizeof r.s;
+    bool v56 = r.version == 5 || r.version == 6;
+    size_t want = old ? OLD_SIZE : v56 ? V6_SIZE : sizeof r.s;
     if (len != offsetof(record_t, s) + want || r.size != want) {
         return false;
     }
@@ -98,7 +106,7 @@ bool settings_load(tc_settings_t *out, bool *migrated)
            default, and the caller says so. */
         r.s.period_ms = CONFIG_TARGETCAM_FRAME_PERIOD_MS;
         *migrated = true;
-    } else if (!old && r.version != VERSION && r.version != 5) {
+    } else if (!old && !v56 && r.version != VERSION) {
         return false;
     }
     *out = r.s;

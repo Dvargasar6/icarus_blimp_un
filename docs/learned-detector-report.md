@@ -973,3 +973,64 @@ Orange and pink balloons are painted as background, as §9.2 planned.
   the crops separates the balloons across sessions.
 - Whether `Wc` gives the same gains for the same light on two days.
 - Nothing in this section has run on the board; no classifier is installed.
+
+---
+
+## 12. Phase C2: the crop CNN, stage 3 (2026-10-29)
+
+### 12.1 What was built
+
+- **`main/blob_cnn.{c,h}`**: the network costed in the feasibility analysis
+  (three 3×3 convolutions with ReLU, 8–16–16 channels, two 2×2 max-pools,
+  global average, one logistic unit), on 16×16 crops by default
+  (`blob_crop_down16` of the 24×24 crop) or 24×24. Int8 weights per layer,
+  uint8 activations, integer requantisation (multiplier and shift) and a
+  rounded global average, so everything up to the logit is integer and the PC
+  reproduces it bit for bit; only the final logistic is float. Record magic
+  `TCCN`, carrying the train id of the colour table it was trained behind.
+  Static activation buffers (~15 kB); no heap, no TensorFlow Lite Micro.
+- **Stage 3 in `tc_pipeline.c`**: the CNN checks the `cnn_k` largest blobs
+  stage 2 kept, drops the ones below its threshold, and the rest move up. The
+  survivors past `cnn_k` keep stage 2's confidence (decided at implementation,
+  open to review): blob 1 is always checked.
+- **Firmware**: the CNN is loaded and checked at boot (`cnn=ok|none|bad|
+  mismatch`, `cnn_id=`), `!thr3` and `!cnnk` set the threshold and the blobs
+  checked (settings v7, 36 B; v5/v6 records read as a prefix), and
+  `!cnnbench [16|24]` times the network on the board (phase C0).
+- **`host/train/train_cnn.py`**: training in float with numpy alone (im2col
+  convolutions, hand-written backpropagation checked against finite
+  differences, Adam, class-weighted cross-entropy, mirror and brightness
+  augmentation), post-training quantisation calibrated on the 99.9th
+  percentile of each layer's output, and a numpy copy of the integer network
+  that the C one is checked against on every run. Training data is every
+  blob the colour table finds; the threshold is chosen by leaving one session
+  out with the classifier's frame cost, running each held-out frame as stage
+  3 runs in flight (the classifier, then the CNN on the `cnn_k` largest), with
+  the `--max-lost` exclusion. Why numpy: RECOGNITION.md §10.
+- **tcview**: Train (stage 3, behind a parent set that runs stage 2), Verify
+  (stage 3 candidates), Firmware (installing a set with a CNN, the camera
+  check), Image & calibration (the CNN's ids, `!thr3`, `!cnnk`).
+
+### 12.2 Measured (PC)
+
+- C suites pass; the viewer suite passes, with the new `test_cnn.py`
+  (gradients within 1e-3 relative of finite differences; integer sums equal
+  to `blob_cnn.c` on 30 random crops at 16 and 24; record refusals; stage 3
+  through the pipeline).
+- The firmware builds without warnings with and without a CNN compiled in.
+- **First real training run** (behind `tabla_1_s3`, sessions `s1` and `s3`,
+  205 crops of which 72 balloon, 16×16, 40 epochs): 23 s in all. The integer
+  network decides like the float one on all 205 crops at the chosen threshold
+  (largest confidence difference 0.034); 165 904 multiply-adds per crop,
+  3 688 weight bytes, a 3 903 B record. Held out, the CNN **does not lower
+  the cost** (49, as stage 2 alone): the chosen threshold, 0.10, keeps
+  nearly everything. One fold trains on 49 crops, and the two sessions have
+  different white-balance gains (§11.4).
+
+### 12.3 Not established
+
+- **The cost on the board.** Phase C0: `!cnnbench` gives µs per crop and
+  cycles per multiply-add; the 16 vs 24 choice and `cnn_k` follow from it.
+- Whether the CNN separates the balloons with enough sessions under equal
+  gains. Nothing here says it does or does not.
+- The temperature with stage 3 running for ten minutes or more.
