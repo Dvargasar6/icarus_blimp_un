@@ -1,0 +1,40 @@
+$ python host/train/train_lut.py --out models/lut_20261029_s1-s3 data/train/s1 data/train/s3
+s1         44 frames   19094 balloon px (3543 colours)   822432 background px
+s3         120 frames   33034 balloon px (4280 colours)  2262896 background px
+
+leave one session out, 168 settings, best first:
+  sigma    8  k   10  min_ev 0.5  px F1 0.364  blob F0.5 0.278  EXCLUDED: false blob 1
+      held out s1       TP 23 FN 3 FP 14 split 1  false b1 3/18  px P  59.1 R  27.8
+      held out s3       TP 39 FN 1 FP 186 split 0  false b1 65/80  px P  22.6 R  77.1
+  sigma    8  k   10  min_ev   1  px F1 0.362  blob F0.5 0.279  EXCLUDED: false blob 1
+      held out s1       TP 23 FN 3 FP 14 split 1  false b1 3/18  px P  59.1 R  27.8
+      held out s3       TP 39 FN 1 FP 185 split 0  false b1 65/80  px P  22.4 R  76.2
+  sigma    8  k    7  min_ev 0.5  px F1 0.362  blob F0.5 0.246  EXCLUDED: false blob 1
+      held out s1       TP 26 FN 0 FP 18 split 4  false b1 5/18  px P  56.2 R  33.6
+      held out s3       TP 37 FN 3 FP 222 split 0  false b1 67/80  px P  18.6 R  81.4
+  sigma    8  k    7  min_ev   1  px F1 0.361  blob F0.5 0.246  EXCLUDED: false blob 1
+      held out s1       TP 26 FN 0 FP 18 split 4  false b1 5/18  px P  56.2 R  33.6
+      held out s3       TP 37 FN 3 FP 222 split 0  false b1 67/80  px P  18.5 R  80.5
+  sigma    6  k   10  min_ev 0.5  px F1 0.360  blob F0.5 0.267  EXCLUDED: false blob 1
+      held out s1       TP 24 FN 2 FP 16 split 7  false b1 4/18  px P  58.2 R  31.0
+      held out s3       TP 39 FN 1 FP 199 split 0  false b1 66/80  px P  19.7 R  79.1
+  sigma    8  k   10  min_ev   2  px F1 0.360  blob F0.5 0.281  EXCLUDED: false blob 1
+      held out s1       TP 23 FN 3 FP 14 split 1  false b1 3/18  px P  59.1 R  27.7
+      held out s3       TP 39 FN 1 FP 183 split 0  false b1 65/80  px P  22.2 R  74.7
+  sigma    8  k    7  min_ev   2  px F1 0.358  blob F0.5 0.248  EXCLUDED: false blob 1
+      held out s1       TP 26 FN 0 FP 18 split 4  false b1 5/18  px P  56.2 R  33.4
+      held out s3       TP 37 FN 3 FP 220 split 0  false b1 67/80  px P  18.3 R  78.9
+  sigma    6  k    7  min_ev 0.5  px F1 0.357  blob F0.5 0.239  EXCLUDED: false blob 1
+      held out s1       TP 26 FN 0 FP 17 split 5  false b1 5/18  px P  55.2 R  36.9
+      held out s3       TP 39 FN 1 FP 242 split 0  false b1 70/80  px P  16.4 R  82.3
+
+WARNING: every setting puts a false blob 1 on a held-out frame without a
+balloon. Do not fly this table. Check those frames' labels (is the balloon
+really out of view?) with eval_frames.py, and keep the current table.
+
+final table: sigma 8  k 10  min_evidence 0.5, trained on s1 + s3: 6877 colours, id 1793301871
+  on s1       (training data, optimistic) TP 25 FN 1 FP 22 split 6  false b1 5/18  px P  57.0 R  35.0
+  on s3       (training data, optimistic) TP 39 FN 1 FP 113 split 3  false b1 47/80  px P  33.6 R  66.3
+wrote models/lut_20261029_s1-s3/lut_model.{bin,h,json}
+next: eval_frames.py --stage 1 --lut models/lut_20261029_s1-s3/lut_model.bin data/train/s1 data/train/s3
+      and, to use it, copy lut_model.* into main/models/, rebuild and flash

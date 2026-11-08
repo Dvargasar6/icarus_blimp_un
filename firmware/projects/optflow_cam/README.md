@@ -121,11 +121,11 @@ an external probe or an IR thermometer on the shield can.
 ## Building and flashing
 
 ```bash
-source /home/talos/.espressif/tools/activate_idf_v5.5.5.sh
+source $HOME/.espressif/tools/activate_idf_v5.5.5.sh
 
 # idf.py is a shell function in this install; call it directly from scripts
-IDF_PY="/home/talos/.espressif/tools/python/v5.5.5/venv/bin/python \
-        /home/talos/.espressif/v5.5.5/esp-idf/tools/idf.py"
+IDF_PY="$HOME/.espressif/tools/python/v5.5.5/venv/bin/python \
+        $HOME/.espressif/v5.5.5/esp-idf/tools/idf.py"
 
 $IDF_PY -C firmware/projects/optflow_cam set-target esp32
 $IDF_PY -C firmware/projects/optflow_cam build

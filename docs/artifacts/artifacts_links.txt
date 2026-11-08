@@ -13,3 +13,9 @@ https://claude.ai/artifact/X57JeWqYWXjgwzQSo3AtGY
 Optical-flow implementation idea
 https://claude.ai/artifact/FwiyATq4wjgRC2rJZvZXo3#e49bd4b1-9eda
 
+A small neural network on the ESP32-CAM?
+https://claude.ai/artifact/Kt5B8xrRaJW1sG9Bqd3ttf
+
+target_cam & tcview
+Https://Claude.Ai/Artifact/Gtoaznivdtxpexywgjgvhxhttps://claude.ai/artifact/GtoaznivDTxpEXyWgJgvhX
+https://claude.ai/referral/_Pzu6iVrCQ

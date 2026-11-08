@@ -1,0 +1,107 @@
+menu "Target Camera Configuration"
+
+    choice TARGETCAM_BOARD
+        prompt "Camera board"
+        default TARGETCAM_BOARD_AI_THINKER
+        help
+            Selects the pin map in camera_pins.h.
+
+        config TARGETCAM_BOARD_AI_THINKER
+            bool "AI-Thinker ESP32-CAM"
+        config TARGETCAM_BOARD_ESP_EYE
+            bool "ESP-EYE"
+        config TARGETCAM_BOARD_XIAO_S3
+            bool "Seeed XIAO ESP32S3 Sense"
+    endchoice
+
+    config TARGETCAM_FRAME_PERIOD_MS
+        int "Frame period (milliseconds)"
+        range 33 1000
+        default 80
+        help
+            Rows come every n-th sensor frame, n chosen so the period is
+            closest to this. The sensor is the clock: the loop takes each
+            frame as the OV2640 completes it. At XCLK 20 MHz that is every
+            79.968 ms (1 599 360 XCLK cycles, from the driver's frame
+            timestamps on 2026-10-14), so 80 gives every frame, 12.5 FPS, and
+            nothing shorter exists. An earlier build paced on the FreeRTOS
+            tick at exactly 80 ms, assuming the two stayed locked; they beat
+            instead, and a frame was missed about every 200 s. Changeable at
+            runtime with 'f<fps>', which accepts decimals ('f12.5').
+
+    config TARGETCAM_XCLK_MHZ
+        int "Sensor clock XCLK (MHz)"
+        range 4 20
+        default 20
+        help
+            The OV2640 frame period scales inversely with XCLK: optflow_cam
+            measured 159.9 ms at 10 MHz and 80.00 ms at 20 MHz. 10 MHz runs
+            cooler and caps the stream at 6.25 FPS; the frame period follows
+            it, since the loop is paced by the sensor.
+
+    config TARGETCAM_HFOV_DEG
+        int "Horizontal field of view (degrees)"
+        range 10 150
+        default 54
+        help
+            Converts pixel position into bearing, and apparent size into range.
+            54 degrees is the computed horizontal component of the stock OV2640
+            65-degree diagonal lens at 4:3. CALIBRATE THIS: it scales every
+            bearing and range this firmware reports.
+
+    config TARGETCAM_VFLIP
+        bool "Flip the image vertically"
+        default n
+        help
+            Set this if the camera is mounted upside down on the airframe, so
+            that +el still means "above the nose". A single board can also be
+            turned at run time, without a rebuild: !flip 1, then !save.
+
+    config TARGETCAM_HMIRROR
+        bool "Mirror the image horizontally"
+        default n
+        help
+            Set together with VFLIP for a camera rotated 180 degrees, so that
+            +az still means "right of the nose".
+
+    choice TARGETCAM_PRESET
+        prompt "Target colour preset"
+        default TARGETCAM_PRESET_RED
+        help
+            Colour the detector looks for at boot. RED is the IAR-LARC waypoint
+            colour (red mylar balloons); the others are for bench testing with
+            other balloons. Changeable at runtime with 'p red', 'p blue',
+            'p green' or 'p orange', or replaced entirely by 'c' (calibrate on
+            whatever is in the centre of the view).
+
+        config TARGETCAM_PRESET_RED
+            bool "Red (hue 0 +/-12) - competition waypoints"
+        config TARGETCAM_PRESET_BLUE
+            bool "Blue (hue 220 +/-30)"
+        config TARGETCAM_PRESET_GREEN
+            bool "Green (hue 125 +/-35)"
+        config TARGETCAM_PRESET_ORANGE
+            bool "Orange (hue 25 +/-10)"
+    endchoice
+
+    config TARGETCAM_MIN_AREA
+        int "Smallest blob reported (pixels)"
+        range 1 19200
+        default 25
+        help
+            25 px is about a 5.6 px circle, ~2 deg across at QQVGA. A 550 mm
+            waypoint balloon still covers ~36 px at 12 m, more than the 10 m
+            length of the arena. Smaller admits more false
+            detections from coloured clutter.
+
+    config TARGETCAM_TARGET_MM
+        int "Target diameter for range estimate (mm, 0 = off)"
+        range 0 5000
+        default 550
+        help
+            If the target's real size is known, its apparent size gives a range.
+            550 mm is the middle of the 50-60 cm the IAR-LARC rules give for the
+            22-inch waypoint balloons. Only meaningful for a roughly round
+            target seen whole: clipped targets report no range.
+
+endmenu

@@ -1,0 +1,89 @@
+{
+ "train_id": 1793156579,
+ "lut_id": 1792216162,
+ "lut": "tables/firmware_id1792216162/lut_model.bin",
+ "l2": 1.0,
+ "threshold": 0.5,
+ "feat_version": 1,
+ "features": [
+  "fill",
+  "log_aspect",
+  "hue_spread",
+  "sat_mean",
+  "sat_std",
+  "val_mean",
+  "highlight",
+  "edge",
+  "texture",
+  "ring",
+  "cy_norm",
+  "log_area"
+ ],
+ "weights": {
+  "fill": -0.04573587542745174,
+  "log_aspect": 0.9307186290733483,
+  "hue_spread": 0.3855170658999576,
+  "sat_mean": 1.6709785914767872,
+  "sat_std": 0.6580614089487347,
+  "val_mean": 0.7216435639925595,
+  "highlight": -0.041497251007663855,
+  "edge": -0.09991592686988177,
+  "texture": -0.07113644397378359,
+  "ring": 0.3484609268969651,
+  "cy_norm": -0.21938544053483555,
+  "log_area": 0.6019040832569721
+ },
+ "bias": -1.0734320928439944,
+ "mean": [
+  0.40475923104549016,
+  0.024901173092190206,
+  11.198404282096803,
+  166.17026510764293,
+  25.242607638591856,
+  92.4634391754631,
+  0.015936889534900477,
+  27.611733899341793,
+  15.093021766407283,
+  0.08231417190807865,
+  0.5604430550313372,
+  5.0084955354375165
+ ],
+ "scale": [
+  8.659619403172801,
+  1.9294163993926285,
+  0.3272144428897496,
+  0.05203048791361544,
+  0.1423129241932489,
+  0.03297500343134503,
+  17.54695266804704,
+  0.04799729515111571,
+  0.0784733840662063,
+  12.386624908074657,
+  4.520831861886766,
+  0.8186317681000678
+ ],
+ "sessions": [
+  "blobs_2"
+ ],
+ "session_paths": [
+  "data/datasets/blobs_2.npz"
+ ],
+ "blobs": {
+  "n": 254,
+  "balloon": 48,
+  "not_balloon": 206
+ },
+ "objective": "leave-one-session-out frame cost: false blob 1 + wrong blob 1 + FN",
+ "caveat": "parameters chosen on the same folds they are scored on",
+ "stage1_held_out": null,
+ "warnings": [],
+ "data_warnings": [
+  "blob sets hold only the balloons the table found: their FN counts balloons the classifier drops, not ones the table missed"
+ ],
+ "session_kinds": {
+  "blobs_2": "blobs"
+ },
+ "search": [],
+ "record_bytes": 180,
+ "crc32": "937e8804"
+}

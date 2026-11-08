@@ -1,0 +1,59 @@
+table_red  20 frames   16691 balloon px (3295 colours)   364558 background px
+table_orange 10 frames       0 balloon px (0 colours)   192000 background px
+table_pink 10 frames       0 balloon px (0 colours)   192000 background px
+table_env  20 frames       0 balloon px (0 colours)   384000 background px
+
+leave one session out, 168 settings, best first:
+  sigma    0  k    2  min_ev 0.5  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 25 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 29 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP 19 split 0  false b1 11/20  px P   0.0 R   nan
+  sigma    0  k    2  min_ev   1  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 25 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 29 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP 19 split 0  false b1 11/20  px P   0.0 R   nan
+  sigma    0  k    2  min_ev   2  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 26 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 27 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP 15 split 0  false b1 10/20  px P   0.0 R   nan
+  sigma    0  k    3  min_ev 0.5  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 22 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 27 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP 11 split 0  false b1 8/20  px P   0.0 R   nan
+  sigma    0  k    3  min_ev   1  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 22 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 27 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP 11 split 0  false b1 8/20  px P   0.0 R   nan
+  sigma    0  k    3  min_ev   2  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 23 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 24 split 0  false b1 9/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP  9 split 0  false b1 6/20  px P   0.0 R   nan
+  sigma    0  k    5  min_ev 0.5  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 16 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 23 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP  8 split 0  false b1 7/20  px P   0.0 R   nan
+  sigma    0  k    5  min_ev   1  px F1 0.000  blob F0.5 0.000  EXCLUDED: false blob 1
+      held out table_red TP 0 FN 20 FP  0 split 0  false b1 0/0  px P   nan R   0.0
+      held out table_orange TP 0 FN 0 FP 16 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_pink TP 0 FN 0 FP 23 split 0  false b1 10/10  px P   0.0 R   nan
+      held out table_env TP 0 FN 0 FP  8 split 0  false b1 7/20  px P   0.0 R   nan
+
+WARNING: every setting puts a false blob 1 on a held-out frame without a
+balloon. Do not fly this table. Check those frames' labels (is the balloon
+really out of view?) with eval_frames.py, and keep the current table.
+
+final table: sigma 0  k 2  min_evidence 0.5, trained on table_red + table_orange + table_pink + table_env: 2797 colours, id 1793156540
+  on table_red (training data, optimistic) TP 20 FN 0 FP 19 split 0  false b1 0/0  px P  56.6 R  89.4
+  on table_orange (training data, optimistic) TP 0 FN 0 FP 22 split 0  false b1 10/10  px P   0.0 R   nan
+  on table_pink (training data, optimistic) TP 0 FN 0 FP 26 split 0  false b1 10/10  px P   0.0 R   nan
+  on table_env (training data, optimistic) TP 0 FN 0 FP 19 split 0  false b1 10/20  px P   0.0 R   nan
+wrote tables/tabla_1_s3/lut_model.{bin,h,json}
+next: eval_frames.py --stage 1 --lut tables/tabla_1_s3/lut_model.bin data/train/s3/table_red data/train/s3/table_orange data/train/s3/table_pink data/train/s3/table_env
+      and, to use it, copy lut_model.* into main/models/, rebuild and flash

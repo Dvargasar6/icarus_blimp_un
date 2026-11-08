@@ -10,6 +10,7 @@ An indoor autonomous blimp that has to hover at 2 m (band 1.85–2.25 m). It is 
 |---|---|---|
 | `firmware/projects/i2c_tools/` | ESP32-S3 (Waveshare ESP32-S3-Zero) | The flight-controller-to-be: GY-88 IMU/mag/baro, altimeter, four DRV8833 thrusters. The name comes from the Espressif `i2c_tools` example it grew out of, and the console prompt is still `i2c-tools>`. |
 | `firmware/projects/optflow_cam/` | ESP32-CAM (AI-Thinker, original ESP32) | Downward optical flow. It prints CSV over UART to a laptop. |
+| `firmware/projects/target_cam/` | ESP32-CAM (AI-Thinker, original ESP32) | Forward colour-blob detector for the red waypoint balloons. It prints CSV over UART. `host/viewer/` (`tcview`, its own `targetcam` conda env) shows the raw image over the same serial link and is where the user calibrates by hand. Settings persist in NVS. |
 | `firmware/projects/blink/` | — | Stock ESP-IDF example, kept as a toolchain smoke test. |
 | `software/` | host | Python bench tools imported from a **separate quadcopter project (esp-drone)**. They speak CRTP-over-UDP to esp-drone firmware, **not** to anything in this repo. See `docs/esp-drone-tools-report.md` §8 for what would need to change to use them here. |
 
@@ -20,13 +21,13 @@ The two chips are not linked yet. `docs/inter-board-link-plan.md` (untracked dra
 ESP-IDF was installed with EIM, so the activation script sits at a non-standard path:
 
 ```bash
-source /home/talos/.espressif/tools/activate_idf_v5.5.5.sh
+source $HOME/.espressif/tools/activate_idf_v5.5.5.sh
 ```
 
 After activation `idf.py` is a shell function, so `timeout`, `xargs` and similar can't exec it. From scripts or tool calls, invoke it directly:
 
 ```bash
-IDF_PY="/home/talos/.espressif/tools/python/v5.5.5/venv/bin/python /home/talos/.espressif/v5.5.5/esp-idf/tools/idf.py"
+IDF_PY="$HOME/.espressif/tools/python/v5.5.5/venv/bin/python $HOME/.espressif/v5.5.5/esp-idf/tools/idf.py"
 $IDF_PY -C firmware/projects/i2c_tools set-target esp32s3   # once per fresh build dir
 $IDF_PY -C firmware/projects/i2c_tools build
 $IDF_PY -C firmware/projects/i2c_tools -p /dev/ttyACM0 flash

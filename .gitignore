@@ -9,15 +9,24 @@ dependencies.lock
 
 # Host test binaries
 firmware/projects/*/host/test_flow_match
+firmware/projects/*/host/test_blob_detect
+firmware/projects/*/host/test_pipeline
+firmware/projects/*/host/test_blob_feat
+firmware/projects/*/host/libblob_detect.so
 
 # Reference papers: published third-party work, 35 MB, re-downloadable.
 # Citations and links are kept in docs/reference/README.md instead.
 docs/reference/*.pdf
 
+#iamges collected for training
+firmware/projects/target_cam/data/
+
 # Host sweep binary (build output of bias_sweep.c, via host/Makefile)
 firmware/projects/*/host/bias_sweep
 software/cfcache/
 __pycache__/
+.pytest_cache/
 
-# Configuracion local de vscode
+# Per-machine VS Code and ESP-IDF extension settings (paths differ between the two computers)
 .vscode/
+

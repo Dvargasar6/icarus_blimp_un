@@ -1,0 +1,27 @@
+colour table tables/tabla_1_s3/lut_model.bin, id 1793156551
+classifier_red            20 frames   43 blobs:  19 balloon,  24 not
+classifier_orange         10 frames   12 blobs:   0 balloon,  12 not
+classifier_pink           10 frames    8 blobs:   0 balloon,   8 not
+classifier_env            20 frames   22 blobs:   0 balloon,  22 not
+
+final classifier: l2 1  threshold 0.50, behind table 1793156551, trained on classifier_red + classifier_orange + classifier_pink + classifier_env: 85 blobs (19 balloon), id 1793156577
+  weights (on standardised features, largest first):
+    log_area     +1.318
+    fill         +1.289
+    sat_mean     +1.048
+    cy_norm      -0.978
+    hue_spread   +0.887
+    edge         -0.671
+    sat_std      +0.642
+    texture      +0.608
+    val_mean     -0.488
+    ring         -0.366
+    log_aspect   -0.303
+    highlight    +0.086
+  bias -1.315
+  on classifier_red         (training data, optimistic) cost  6 = false b1 0/0 + wrong b1 3 + FN 3   FP  4  dropped 22 (2 balloons)
+  on classifier_orange      (training data, optimistic) cost  6 = false b1 6/10 + wrong b1 0 + FN 0   FP  6  dropped 6 (0 balloons)
+  on classifier_pink        (training data, optimistic) cost  1 = false b1 1/10 + wrong b1 0 + FN 0   FP  1  dropped 7 (0 balloons)
+  on classifier_env         (training data, optimistic) cost  2 = false b1 2/20 + wrong b1 0 + FN 0   FP  2  dropped 20 (0 balloons)
+wrote tables/tabla_1_s3/clf_model.{bin,h,json}
+next: eval_frames.py --stage 2 --lut tables/tabla_1_s3/lut_model.bin --clf tables/tabla_1_s3/clf_model.bin DIR...

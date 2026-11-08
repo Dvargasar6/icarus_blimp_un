@@ -1,6 +1,6 @@
 # Blimp Sensor Bring-Up Report
 
-**Project:** `/home/talos/blimp` — autonomous blimp flight controller
+**Project:** `icarus_blimp_un` (repo root) — autonomous blimp flight controller
 **Target:** Waveshare ESP32-S3-Zero (ESP32-S3, Xtensa LX7, 4 MB flash)
 **Framework:** ESP-IDF v5.5.5
 **Bench project:** `firmware/projects/i2c_tools/`
@@ -115,7 +115,7 @@ a non-standard location:
 
 ```bash
 # Activation script
-source /home/talos/.espressif/tools/activate_idf_v5.5.5.sh
+source $HOME/.espressif/tools/activate_idf_v5.5.5.sh
 ```
 
 > **Gotcha that costs time:** after activation, `idf.py` is a **shell function**,
@@ -123,9 +123,9 @@ source /home/talos/.espressif/tools/activate_idf_v5.5.5.sh
 > shells and to scripted builds. Invoke the real thing directly:
 
 ```bash
-"/home/talos/.espressif/tools/python/v5.5.5/venv/bin/python" \
-  "/home/talos/.espressif/v5.5.5/esp-idf/tools/idf.py" \
-  -C /home/talos/blimp/firmware/projects/i2c_tools build flash
+"$HOME/.espressif/tools/python/v5.5.5/venv/bin/python" \
+  "$HOME/.espressif/v5.5.5/esp-idf/tools/idf.py" \
+  -C firmware/projects/i2c_tools build flash
 ```
 
 > **Second gotcha:** `idf.py monitor` buffers its output when stdout is not a TTY,

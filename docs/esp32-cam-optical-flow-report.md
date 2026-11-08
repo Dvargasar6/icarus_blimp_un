@@ -1472,13 +1472,13 @@ editing:
 | PCLK | 22 | | Y2 (D0) | 5 |
 | Flash LED | 4 (1 W — heat source, forced low) | | | |
 
-**Toolchain:** `source /home/talos/.espressif/tools/activate_idf_v5.5.5.sh`.
+**Toolchain:** `source $HOME/.espressif/tools/activate_idf_v5.5.5.sh`.
 `idf.py` is a shell *function* and is invisible to non-interactive shells;
 invoke it directly:
 
 ```
-/home/talos/.espressif/tools/python/v5.5.5/venv/bin/python \
-  /home/talos/.espressif/v5.5.5/esp-idf/tools/idf.py -C <project> ...
+$HOME/.espressif/tools/python/v5.5.5/venv/bin/python \
+  $HOME/.espressif/v5.5.5/esp-idf/tools/idf.py -C <project> ...
 ```
 
 **Output CSV format** (16 fields):
